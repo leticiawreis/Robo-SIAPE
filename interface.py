@@ -5,23 +5,24 @@ import os
 import queue
 import re
 import threading
-from datetime import date
+from collections import OrderedDict
+from datetime import date, datetime
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QColor, QPainter, QPen
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QRectF, QUrl
+from PyQt6.QtGui import QDesktopServices, QFont, QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFrame,
-    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QTextEdit,
@@ -33,23 +34,25 @@ from robo_siape import INDICES_ANOS, meses_disponiveis, executar_pipeline_comple
 
 
 ARQUIVO_USUARIOS = "usuarios.json"
+ARQUIVO_HISTORICO = "historico_execucoes.json"
+ARQUIVO_CONFIG = "config.json"
 PASTA_SAIDA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saida")
 
 def preparar_pastas():
     os.makedirs(PASTA_SAIDA, exist_ok=True)
 
-BG = "#090909"
-SURFACE = "#111111"
-SURFACE_2 = "#151515"
-SURFACE_3 = "#1B1B1B"
-BORDER = "#292929"
-YELLOW = "#D6A84F"
-YELLOW_LIGHT = "#F0C96A"
-TEXT = "#F5F1E8"
-MUTED = "#9B978E"
-SUCCESS = "#74C69D"
-ERROR = "#E57373"
-WARNING = "#E5B85C"
+BG = "#F5F1E7"
+SURFACE = "#FFFDF8"
+SURFACE_2 = "#F8F3E8"
+SURFACE_3 = "#F1EBDD"
+BORDER = "#E3DCCF"
+YELLOW = "#D5A63A"
+YELLOW_LIGHT = "#E7BD58"
+TEXT = "#25221D"
+MUTED = "#756E63"
+SUCCESS = "#4F9B73"
+ERROR = "#C85B5B"
+WARNING = "#C58D2D"
 
 
 def carregar_usuarios():
@@ -73,12 +76,121 @@ def usuario_valido(usuario):
     return re.fullmatch(r"[A-Za-z0-9_.-]{3,30}", usuario) is not None
 
 
-def aplicar_sombra(widget, blur=28, y=8, alpha=90):
-    sombra = QGraphicsDropShadowEffect()
-    sombra.setBlurRadius(blur)
-    sombra.setOffset(0, y)
-    sombra.setColor(QColor(0, 0, 0, alpha))
-    widget.setGraphicsEffect(sombra)
+# =====================================================================
+# HISTÓRICO DE EXECUÇÕES — alimenta o gráfico e os indicadores do painel
+# =====================================================================
+def carregar_historico():
+    if not os.path.exists(ARQUIVO_HISTORICO):
+        return []
+    try:
+        with open(ARQUIVO_HISTORICO, "r", encoding="utf-8") as arquivo:
+            return json.load(arquivo)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def salvar_historico(historico):
+    with open(ARQUIVO_HISTORICO, "w", encoding="utf-8") as arquivo:
+        json.dump(historico[-200:], arquivo, indent=2, ensure_ascii=False)
+
+
+def registrar_execucao(ano, mes, status, arquivo_gerado=None):
+    historico = carregar_historico()
+    historico.append(
+        {
+            "ano": ano,
+            "mes": mes,
+            "status": status,
+            "arquivo": arquivo_gerado,
+            "data": datetime.now().isoformat(timespec="seconds"),
+        }
+    )
+    salvar_historico(historico)
+    return historico
+
+
+def estatisticas_execucoes():
+    historico = carregar_historico()
+    total = len(historico)
+    sucesso = sum(1 for item in historico if item.get("status") == "sucesso")
+    taxa = round((sucesso / total) * 100) if total else 0
+    return total, sucesso, taxa
+
+
+def contagem_mensal(qtd_meses=6):
+    historico = carregar_historico()
+    contagem = OrderedDict()
+    for item in historico:
+        mes = str(item.get("mes", "")).strip()
+        ano = str(item.get("ano", "")).strip()
+        chave = f"{mes[:3].capitalize()}/{ano[-2:]}" if mes and ano else "—"
+        contagem[chave] = contagem.get(chave, 0) + 1
+    chaves = list(contagem.keys())[-qtd_meses:]
+    valores = [contagem[c] for c in chaves]
+    while len(valores) < qtd_meses:
+        valores.insert(0, 0)
+        chaves.insert(0, "")
+    return chaves, valores
+
+
+def ultima_execucao():
+    historico = carregar_historico()
+    if not historico:
+        return None
+    return historico[-1]
+
+
+# =====================================================================
+# CONFIGURAÇÕES DO USUÁRIO — preferências reais aplicadas no painel
+# =====================================================================
+def carregar_config():
+    padrao = {"notificar_conclusao": True, "abrir_pasta_automatico": False}
+    if os.path.exists(ARQUIVO_CONFIG):
+        try:
+            with open(ARQUIVO_CONFIG, "r", encoding="utf-8") as arquivo:
+                padrao.update(json.load(arquivo))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return padrao
+
+
+def salvar_config(config):
+    with open(ARQUIVO_CONFIG, "w", encoding="utf-8") as arquivo:
+        json.dump(config, arquivo, indent=2, ensure_ascii=False)
+
+
+# =====================================================================
+# ARQUIVOS DE SAÍDA — lista real do que o robô já gerou em disco
+# =====================================================================
+def formatar_tamanho(num_bytes):
+    tamanho = float(num_bytes)
+    for unidade in ("B", "KB", "MB", "GB"):
+        if tamanho < 1024 or unidade == "GB":
+            return f"{tamanho:.0f} {unidade}" if unidade == "B" else f"{tamanho:.1f} {unidade}"
+        tamanho /= 1024
+    return f"{tamanho:.1f} GB"
+
+
+def listar_arquivos_saida(limite=6):
+    if not os.path.isdir(PASTA_SAIDA):
+        return []
+    itens = []
+    for nome in os.listdir(PASTA_SAIDA):
+        caminho = os.path.join(PASTA_SAIDA, nome)
+        if os.path.isfile(caminho):
+            info = os.stat(caminho)
+            itens.append(
+                {
+                    "nome": nome,
+                    "caminho": caminho,
+                    "tamanho": formatar_tamanho(info.st_size),
+                    "data": datetime.fromtimestamp(info.st_mtime).strftime("%d/%m/%Y"),
+                    "mtime": info.st_mtime,
+                }
+            )
+    itens.sort(key=lambda item: item["mtime"], reverse=True)
+    return itens[:limite]
+
 
 
 def estilizar_combo(combo):
@@ -188,7 +300,136 @@ class Card(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("card")
-        aplicar_sombra(self)
+
+
+class GaugeWidget(QWidget):
+    """Indicador circular com um valor real (contagem ou percentual)."""
+
+    def __init__(self, valor=0, maximo=100, sufixo="", rotulo="", parent=None):
+        super().__init__(parent)
+        self.valor = valor
+        self.maximo = max(maximo, 1)
+        self.sufixo = sufixo
+        self.rotulo = rotulo
+        self.setMinimumSize(120, 130)
+
+    def definir_valor(self, valor, maximo=None, rotulo=None):
+        self.valor = valor
+        if maximo is not None:
+            self.maximo = max(maximo, 1)
+        if rotulo is not None:
+            self.rotulo = rotulo
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        lado = min(self.width(), self.height() - 26) - 16
+        x = (self.width() - lado) / 2
+        y = 8
+        area = QRectF(x, y, lado, lado)
+
+        caneta_fundo = QPen(QColor(BORDER))
+        caneta_fundo.setWidth(10)
+        caneta_fundo.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(caneta_fundo)
+        painter.drawArc(area, 225 * 16, -270 * 16)
+
+        proporcao = min(self.valor / self.maximo, 1.0) if self.maximo else 0
+        caneta_valor = QPen(QColor(YELLOW))
+        caneta_valor.setWidth(10)
+        caneta_valor.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(caneta_valor)
+        painter.drawArc(area, 225 * 16, int(-270 * proporcao * 16))
+
+        painter.setPen(QColor(TEXT))
+        painter.setFont(QFont("Segoe UI", 20, QFont.Weight.Black))
+        texto_valor = f"{self.valor}{self.sufixo}"
+        painter.drawText(area, Qt.AlignmentFlag.AlignCenter, texto_valor)
+
+        rotulo_rect = QRectF(0, y + lado - 6, self.width(), 26)
+        painter.setPen(QColor(MUTED))
+        painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        painter.drawText(rotulo_rect, Qt.AlignmentFlag.AlignHCenter, self.rotulo.upper())
+
+
+class BarChartWidget(QWidget):
+    """Mini gráfico de barras com execuções reais por mês."""
+
+    def __init__(self, valores=None, rotulos=None, parent=None):
+        super().__init__(parent)
+        self.valores = valores or []
+        self.rotulos = rotulos or []
+        self.setMinimumHeight(120)
+
+    def definir_dados(self, valores, rotulos):
+        self.valores = valores
+        self.rotulos = rotulos
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        if not self.valores:
+            return
+
+        maximo = max(self.valores) or 1
+        n = len(self.valores)
+        margem = 6
+        base_y = self.height() - 20
+        altura_max = self.height() - 34
+        largura_total = self.width() - margem * 2
+        espaco = 8
+        largura_barra = max((largura_total - espaco * (n - 1)) / n, 6)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        for indice, valor in enumerate(self.valores):
+            altura = 4 if valor == 0 else max(6, (valor / maximo) * altura_max)
+            pos_x = margem + indice * (largura_barra + espaco)
+            pos_y = base_y - altura
+            cor = QColor(YELLOW if indice == n - 1 else YELLOW_LIGHT if valor else BORDER)
+            painter.setBrush(cor)
+            painter.drawRoundedRect(QRectF(pos_x, pos_y, largura_barra, altura), 3, 3)
+
+            if indice < len(self.rotulos) and self.rotulos[indice]:
+                painter.setPen(QColor(MUTED))
+                painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+                painter.drawText(
+                    QRectF(pos_x - 4, self.height() - 15, largura_barra + 8, 14),
+                    Qt.AlignmentFlag.AlignHCenter,
+                    self.rotulos[indice],
+                )
+                painter.setPen(Qt.PenStyle.NoPen)
+
+
+class ToggleSwitch(QPushButton):
+    """Interruptor liga/desliga real, usado para preferências do usuário."""
+
+    def __init__(self, marcado=False, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setChecked(marcado)
+        self.setFixedSize(44, 24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setObjectName("toggleSwitch")
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        raio = self.height() / 2
+
+        cor_fundo = QColor(YELLOW) if self.isChecked() else QColor(BORDER)
+        painter.setBrush(cor_fundo)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(0, 0, self.width(), self.height(), raio, raio)
+
+        diametro = self.height() - 6
+        pos_x = self.width() - diametro - 3 if self.isChecked() else 3
+        painter.setBrush(QColor("#FFFFFF"))
+        painter.drawEllipse(int(pos_x), 3, diametro, diametro)
 
 
 class CaptchaDialog(QDialog):
@@ -322,6 +563,7 @@ class App(QMainWindow):
 
         self.usuario_logado = None
         self.worker = None
+        self.config = carregar_config()
         self.tela = QStackedWidget()
 
         self.setWindowTitle("Robô SIAPE")
@@ -344,7 +586,7 @@ class App(QMainWindow):
         self.conteudo = QFrame()
         self.conteudo.setObjectName("contentArea")
         content_layout = QVBoxLayout(self.conteudo)
-        content_layout.setContentsMargins(48, 38, 48, 35)
+        content_layout.setContentsMargins(42, 34, 42, 32)
         content_layout.addWidget(self.tela)
 
         central_layout.addWidget(self.conteudo, 1)
@@ -353,11 +595,11 @@ class App(QMainWindow):
     def _criar_sidebar(self):
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(250)
+        sidebar.setFixedWidth(238)
 
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(24, 30, 24, 28)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
         topo = QHBoxLayout()
         topo.setSpacing(12)
@@ -386,15 +628,12 @@ class App(QMainWindow):
 
         self.nav_home = self._nav_button("⌂", "Painel")
         self.nav_robot = self._nav_button("◈", "Executar robô")
-        self.nav_log = self._nav_button("≡", "Execução")
 
         self.nav_home.clicked.connect(self.tela_principal)
         self.nav_robot.clicked.connect(self.tela_config_robo)
-        self.nav_log.clicked.connect(self.tela_execucao_placeholder)
 
         layout.addWidget(self.nav_home)
         layout.addWidget(self.nav_robot)
-        layout.addWidget(self.nav_log)
 
         layout.addStretch()
 
@@ -440,7 +679,7 @@ class App(QMainWindow):
         pagina = QWidget()
         layout = QVBoxLayout(pagina)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(24)
+        layout.setSpacing(20)
         self.tela.addWidget(pagina)
         return pagina, layout
 
@@ -620,9 +859,16 @@ class App(QMainWindow):
         self.limpar_tela()
         self.sidebar.show()
         self._definir_usuario()
+        self.config = carregar_config()
+
+        em_execucao = bool(self.worker and self.worker.isRunning())
 
         pagina, layout = self._pagina()
+        layout.setSpacing(16)
 
+        # ---------------------------------------------------------------
+        # Cabeçalho
+        # ---------------------------------------------------------------
         topo = QHBoxLayout()
         topo.addWidget(
             criar_titulo(
@@ -632,71 +878,54 @@ class App(QMainWindow):
         )
         topo.addStretch()
 
-        badge = QLabel("●  PRONTO")
-        badge.setObjectName("statusBadge")
+        badge = QLabel("●  EXECUTANDO" if em_execucao else "●  PRONTO")
+        badge.setObjectName("statusBadgeRunning" if em_execucao else "statusBadge")
         topo.addWidget(badge, alignment=Qt.AlignmentFlag.AlignTop)
         layout.addLayout(topo)
 
-        cards = QHBoxLayout()
-        cards.setSpacing(16)
+        # ---------------------------------------------------------------
+        # Linha 1 — status do robô / atividade recente / ações rápidas
+        # ---------------------------------------------------------------
+        linha1 = QHBoxLayout()
+        linha1.setSpacing(14)
+        linha1.addWidget(self._card_status_robo(em_execucao), 3)
+        linha1.addWidget(self._card_atividade(), 3)
+        linha1.addWidget(self._card_acoes_rapidas(), 3)
+        layout.addLayout(linha1)
 
-        cards.addWidget(
-            self._info_card("01", "Selecionar período", "Escolha ano e mês para iniciar.")
-        )
-        cards.addWidget(
-            self._info_card("02", "Processamento", "Download, tratamento e validação.")
-        )
-        cards.addWidget(
-            self._info_card("03", "Resultado", "Excel final e log em /saida.")
-        )
-        layout.addLayout(cards)
+        # ---------------------------------------------------------------
+        # Linha 2 — barra de atalhos + preferências (toggles reais)
+        # ---------------------------------------------------------------
+        linha2 = QHBoxLayout()
+        linha2.setSpacing(14)
+        linha2.addWidget(self._barra_atalhos(), 3)
+        linha2.addWidget(self._painel_preferencias(), 1)
+        layout.addLayout(linha2)
 
-        armazenamento = Card()
-        armazenamento_layout = QHBoxLayout(armazenamento)
-        armazenamento_layout.setContentsMargins(22, 18, 22, 18)
-        armazenamento_layout.setSpacing(20)
+        # ---------------------------------------------------------------
+        # Linha 3 — arquivos gerados + indicadores (gauges reais)
+        # ---------------------------------------------------------------
+        linha3 = QHBoxLayout()
+        linha3.setSpacing(14)
+        linha3.addWidget(self._card_arquivos(), 2)
+        linha3.addWidget(self._card_gauges(), 1)
+        layout.addLayout(linha3)
 
-        armazenamento_info = QVBoxLayout()
-        armazenamento_info.setSpacing(3)
-
-        armazenamento_titulo = QLabel("ARMAZENAMENTO")
-        armazenamento_titulo.setObjectName("eyebrow")
-        armazenamento_info.addWidget(armazenamento_titulo)
-
-        armazenamento_texto = QLabel("Arquivos finais da execução")
-        armazenamento_texto.setObjectName("cardTitle")
-        armazenamento_info.addWidget(armazenamento_texto)
-
-        armazenamento_layout.addLayout(armazenamento_info, 1)
-
-        pastas = QVBoxLayout()
-        pastas.setSpacing(2)
-
-        pasta_bruta = QLabel(f"Planilha bruta  •  {os.path.join(PASTA_SAIDA, 'base_bruta_AAAA_MM.csv')}")
-        pasta_bruta.setObjectName("storagePath")
-        pastas.addWidget(pasta_bruta)
-
-        pasta_formatada = QLabel(f"Planilha formatada  •  {os.path.join(PASTA_SAIDA, 'base_tratada_AAAA_MM.xlsx')}")
-        pasta_formatada.setObjectName("storagePath")
-        pastas.addWidget(pasta_formatada)
-
-        pasta_log = QLabel(f"Log  •  {os.path.join(PASTA_SAIDA, 'execucao_AAAA_MM.log')}")
-        pasta_log.setObjectName("storagePath")
-        pastas.addWidget(pasta_log)
-
-        armazenamento_layout.addLayout(pastas, 1)
-        layout.addWidget(armazenamento)
-
+        # ---------------------------------------------------------------
+        # Chamada para nova execução
+        # ---------------------------------------------------------------
         destaque = Card()
         dlayout = QHBoxLayout(destaque)
-        dlayout.setContentsMargins(26, 24, 26, 24)
+        dlayout.setContentsMargins(26, 22, 26, 22)
 
         left = QVBoxLayout()
         tag = QLabel("AUTOMAÇÃO SIAPE")
         tag.setObjectName("eyebrow")
         left.addWidget(tag)
 
-        titulo = QLabel("Pronto para iniciar uma nova execução?")
+        titulo = QLabel(
+            "Robô em execução no momento" if em_execucao else "Pronto para iniciar uma nova execução?"
+        )
         titulo.setObjectName("cardTitle")
         left.addWidget(titulo)
 
@@ -709,31 +938,235 @@ class App(QMainWindow):
         left.addWidget(desc)
         dlayout.addLayout(left, 1)
 
-        iniciar = Botao("CONFIGURAR ROBÔ  →", principal=True)
-        iniciar.setMinimumWidth(220)
-        iniciar.clicked.connect(self.tela_config_robo)
+        iniciar = Botao(
+            "ACOMPANHAR EXECUÇÃO  →" if em_execucao else "CONFIGURAR ROBÔ  →",
+            principal=True,
+        )
+        iniciar.setMinimumWidth(230)
+        iniciar.clicked.connect(
+            (lambda: self.tela_execucao(self.worker.ano, self.worker.mes))
+            if em_execucao
+            else self.tela_config_robo
+        )
         dlayout.addWidget(iniciar)
 
         layout.addWidget(destaque)
-        layout.addStretch()
 
-    def _info_card(self, numero, titulo, texto):
+    # ---------------------------------------------------------------
+    # Cartões do painel
+    # ---------------------------------------------------------------
+    def _card_status_robo(self, em_execucao):
         card = Card()
-        card.setMinimumHeight(155)
+        card.setObjectName("darkCard")
+        card.setMinimumHeight(190)
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(20, 20, 20, 20)
-        num = QLabel(numero)
-        num.setObjectName("cardNumber")
-        lay.addWidget(num)
-        t = QLabel(titulo)
-        t.setObjectName("cardTitle")
-        lay.addWidget(t)
-        d = QLabel(texto)
-        d.setObjectName("cardText")
-        d.setWordWrap(True)
-        lay.addWidget(d)
+        lay.setContentsMargins(22, 20, 22, 18)
+        lay.setSpacing(10)
+
+        topo = QHBoxLayout()
+        tag = QLabel("STATUS DO ROBÔ")
+        tag.setObjectName("darkEyebrow")
+        topo.addWidget(tag)
+        topo.addStretch()
+        lay.addLayout(topo)
+
+        valor = QLabel("Executando" if em_execucao else "Pronto")
+        valor.setObjectName("darkValue")
+        lay.addWidget(valor)
+
+        ultima = ultima_execucao()
+        if ultima:
+            try:
+                data_fmt = datetime.fromisoformat(ultima["data"]).strftime("%d/%m/%Y")
+            except ValueError:
+                data_fmt = ultima["data"][:10]
+            legenda = (
+                f"Última execução: {ultima['mes'].capitalize()}/{ultima['ano']} "
+                f"({data_fmt})"
+            )
+        else:
+            legenda = "Nenhuma execução registrada ainda."
+        info = QLabel(legenda)
+        info.setObjectName("darkCaption")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+
+        lay.addStretch()
+
+        rodape = QLabel(f"Usuário conectado: {self.usuario_logado or '—'}")
+        rodape.setObjectName("darkFoot")
+        lay.addWidget(rodape)
+        return card
+
+    def _card_atividade(self):
+        card = Card()
+        card.setMinimumHeight(190)
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(22, 20, 22, 18)
+        lay.setSpacing(6)
+
+        tag = QLabel("ATIVIDADE")
+        tag.setObjectName("eyebrow")
+        lay.addWidget(tag)
+
+        total, sucesso, taxa = estatisticas_execucoes()
+        titulo = QLabel(f"{total} execuções registradas")
+        titulo.setObjectName("cardTitle")
+        lay.addWidget(titulo)
+
+        rotulos, valores = contagem_mensal()
+        self.grafico_atividade = BarChartWidget(valores, rotulos)
+        lay.addWidget(self.grafico_atividade, 1)
+
+        legenda = QLabel("Execuções por mês (últimos 6 meses)")
+        legenda.setObjectName("cardText")
+        lay.addWidget(legenda)
+        return card
+
+    def _card_acoes_rapidas(self):
+        card = Card()
+        card.setMinimumHeight(190)
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(22, 20, 22, 18)
+        lay.setSpacing(10)
+
+        tag = QLabel("AÇÕES RÁPIDAS")
+        tag.setObjectName("eyebrow")
+        lay.addWidget(tag)
+
+        nova = Botao("+  Nova execução", principal=True, compacto=True)
+        nova.clicked.connect(self.tela_config_robo)
+        lay.addWidget(nova)
+
+        abrir = Botao("📂  Abrir pasta de saída", compacto=True)
+        abrir.clicked.connect(self.abrir_pasta_saida)
+        lay.addWidget(abrir)
+
+        atualizar = Botao("⟳  Atualizar painel", compacto=True)
+        atualizar.clicked.connect(self.tela_principal)
+        lay.addWidget(atualizar)
+
         lay.addStretch()
         return card
+
+    def _barra_atalhos(self):
+        card = Card()
+        lay = QHBoxLayout(card)
+        lay.setContentsMargins(18, 12, 18, 12)
+        lay.setSpacing(10)
+
+        atalhos = [
+            ("📄  Resumo", self.tela_principal),
+            ("▶  Nova execução", self.tela_config_robo),
+            ("📂  Pasta de saída", self.abrir_pasta_saida),
+            ("👤  Perfil", lambda: self._mensagem(
+                "Usuário", f"Conectado como: {self.usuario_logado or '—'}", "info"
+            )),
+            ("⟳  Atualizar", self.tela_principal),
+        ]
+        for texto, acao in atalhos:
+            botao = Botao(texto, compacto=True)
+            botao.clicked.connect(acao)
+            lay.addWidget(botao)
+
+        lay.addStretch()
+        return card
+
+    def _painel_preferencias(self):
+        card = Card()
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(18, 12, 18, 12)
+        lay.setSpacing(10)
+
+        linha1 = QHBoxLayout()
+        rotulo1 = QLabel("Notificar ao concluir")
+        rotulo1.setObjectName("cardText")
+        linha1.addWidget(rotulo1, 1)
+        toggle1 = ToggleSwitch(self.config.get("notificar_conclusao", True))
+        toggle1.toggled.connect(lambda marcado: self._alterar_preferencia("notificar_conclusao", marcado))
+        linha1.addWidget(toggle1)
+        lay.addLayout(linha1)
+
+        linha2 = QHBoxLayout()
+        rotulo2 = QLabel("Abrir pasta automaticamente")
+        rotulo2.setObjectName("cardText")
+        linha2.addWidget(rotulo2, 1)
+        toggle2 = ToggleSwitch(self.config.get("abrir_pasta_automatico", False))
+        toggle2.toggled.connect(lambda marcado: self._alterar_preferencia("abrir_pasta_automatico", marcado))
+        linha2.addWidget(toggle2)
+        lay.addLayout(linha2)
+
+        return card
+
+    def _alterar_preferencia(self, chave, valor):
+        self.config[chave] = valor
+        salvar_config(self.config)
+
+    def _card_arquivos(self):
+        card = Card()
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(22, 18, 22, 18)
+        lay.setSpacing(10)
+
+        cabecalho = QHBoxLayout()
+        tag = QLabel("📁  ARQUIVOS FINAIS DA EXECUÇÃO")
+        tag.setObjectName("eyebrow")
+        cabecalho.addWidget(tag)
+        cabecalho.addStretch()
+        lay.addLayout(cabecalho)
+
+        arquivos = listar_arquivos_saida()
+        if not arquivos:
+            vazio = QLabel("Nenhum arquivo gerado ainda. Inicie uma execução para ver os resultados aqui.")
+            vazio.setObjectName("cardText")
+            vazio.setWordWrap(True)
+            lay.addWidget(vazio)
+        else:
+            for item in arquivos:
+                lay.addWidget(self._linha_arquivo(item))
+
+        lay.addStretch()
+        return card
+
+    def _linha_arquivo(self, item):
+        linha = QFrame()
+        linha.setObjectName("fileRow")
+        linha.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay = QHBoxLayout(linha)
+        lay.setContentsMargins(12, 9, 12, 9)
+
+        nome = QLabel(f"📄  {item['nome']}")
+        nome.setObjectName("fileName")
+        lay.addWidget(nome, 1)
+
+        detalhes = QLabel(f"{item['tamanho']}   •   {item['data']}")
+        detalhes.setObjectName("fileMeta")
+        lay.addWidget(detalhes)
+
+        def abrir(_evento, caminho=item["caminho"]):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(caminho))
+
+        linha.mousePressEvent = abrir
+        return linha
+
+    def _card_gauges(self):
+        card = Card()
+        lay = QHBoxLayout(card)
+        lay.setContentsMargins(10, 14, 10, 10)
+        lay.setSpacing(6)
+
+        total, sucesso, taxa = estatisticas_execucoes()
+
+        gauge_total = GaugeWidget(total, max(total, 1), sufixo="", rotulo="Execuções")
+        gauge_taxa = GaugeWidget(taxa, 100, sufixo="%", rotulo="Taxa de sucesso")
+
+        lay.addWidget(gauge_total)
+        lay.addWidget(gauge_taxa)
+        return card
+
+    def abrir_pasta_saida(self):
+        preparar_pastas()
+        QDesktopServices.openUrl(QUrl.fromLocalFile(PASTA_SAIDA))
 
     def tela_config_robo(self):
         self.limpar_tela()
@@ -990,11 +1423,18 @@ class App(QMainWindow):
 
         self.arquivo_resultado.setText("RESULTADO GERADO")
         self.botao_voltar_execucao.setEnabled(True)
-        self._mensagem(
-            "Execução concluída",
-            f"Planilha gerada com sucesso.\n\n{caminho}\n\nLog:\n{caminho_log}",
-            "success",
-        )
+
+        registrar_execucao(self.worker.ano, self.worker.mes, "sucesso", caminho)
+
+        if self.config.get("abrir_pasta_automatico", False):
+            self.abrir_pasta_saida()
+
+        if self.config.get("notificar_conclusao", True):
+            self._mensagem(
+                "Execução concluída",
+                f"Planilha gerada com sucesso.\n\n{caminho}\n\nLog:\n{caminho_log}",
+                "success",
+            )
 
     def _execucao_erro(self, erro):
         self.exec_status.setText("●  ERRO")
@@ -1006,7 +1446,10 @@ class App(QMainWindow):
         self._log_gui(f"✕ Erro: {erro}")
         self.botao_voltar_execucao.setEnabled(True)
 
-        self._mensagem("Falha na execução", str(erro), "error")
+        registrar_execucao(self.worker.ano, self.worker.mes, "erro")
+
+        if self.config.get("notificar_conclusao", True):
+            self._mensagem("Falha na execução", str(erro), "error")
 
     def tela_execucao_placeholder(self):
         if self.worker and self.worker.isRunning():
@@ -1033,254 +1476,503 @@ def aplicar_tema(app):
         * {{
             font-family: "Segoe UI", "Arial";
         }}
-        QMainWindow, QWidget {{
-            background: {BG};
-            color: {TEXT};
+
+        /* =========================================================
+           BASE — claro / bege / futurista
+           ========================================================= */
+        QMainWindow {{
+            background: #F3EFE5;
         }}
-        QFrame#sidebar {{
-            background: #0C0C0C;
-            border-right: 1px solid {BORDER};
-        }}
-        QFrame#contentArea {{
-            background: {BG};
-        }}
-        QLabel#brandName {{
-            color: {TEXT};
-            font-size: 16px;
-            font-weight: 800;
-            letter-spacing: 1px;
-        }}
-        QLabel#brandSub {{
-            color: {YELLOW};
-            font-size: 8px;
-            font-weight: 700;
-            letter-spacing: 1px;
-        }}
-        QFrame#separator {{
-            color: {BORDER};
-            background: {BORDER};
-            max-height: 1px;
-        }}
-        QLabel#sideSection, QLabel#sideCaption {{
-            color: {MUTED};
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: 1px;
-        }}
-        QLabel#sideUser {{
-            color: {TEXT};
-            font-size: 13px;
-            font-weight: 700;
-        }}
-        QFrame#userCard {{
-            background: {SURFACE};
-            border: 1px solid {BORDER};
-            border-radius: 12px;
-        }}
-        QPushButton#navButton {{
+
+        QWidget {{
             background: transparent;
-            color: {MUTED};
-            border: none;
-            border-radius: 9px;
-            text-align: left;
-            padding: 0 14px;
-            font-size: 13px;
-            font-weight: 600;
-        }}
-        QPushButton#navButton:hover {{
-            background: {SURFACE_2};
             color: {TEXT};
         }}
-        QPushButton#navButton:pressed {{
-            background: {SURFACE_3};
-            color: {YELLOW_LIGHT};
+
+        QFrame#contentArea {{
+            background: #F3EFE5;
         }}
-        QLabel#pageTitle {{
-            color: {TEXT};
-            font-size: 30px;
-            font-weight: 800;
+
+        /* =========================================================
+           SIDEBAR — painel lateral minimalista
+           ========================================================= */
+        QFrame#sidebar {{
+            background: #FBF9F4;
+            border-right: 1px solid #DDD5C7;
         }}
-        QLabel#pageSubtitle {{
-            color: {MUTED};
-            font-size: 13px;
+
+        QLabel#brandName {{
+            color: #171612;
+            font-size: 16px;
+            font-weight: 900;
+            letter-spacing: 1.2px;
         }}
-        QFrame#card {{
-            background: {SURFACE};
-            border: 1px solid {BORDER};
-            border-radius: 15px;
-        }}
-        QLabel#cardNumber {{
-            color: {YELLOW};
-            font-size: 12px;
-            font-weight: 800;
-            letter-spacing: 1px;
-        }}
-        QLabel#cardTitle {{
-            color: {TEXT};
-            font-size: 17px;
-            font-weight: 700;
-        }}
-        QLabel#cardText {{
-            color: {MUTED};
-            font-size: 12px;
-            line-height: 1.4;
-        }}
-        QLabel#eyebrow {{
-            color: {YELLOW};
-            font-size: 10px;
-            font-weight: 800;
+
+        QLabel#brandSub {{
+            color: #B17E18;
+            font-size: 8px;
+            font-weight: 900;
             letter-spacing: 1.5px;
         }}
-        QLabel#fieldLabel {{
-            color: {MUTED};
-            font-size: 10px;
-            font-weight: 800;
-            letter-spacing: 1px;
-        }}
-        QLabel#hint {{
-            color: {MUTED};
-            font-size: 11px;
-            padding: 10px 0;
-        }}
-        QLabel#statusBadge, QLabel#statusBadgeRunning, QLabel#statusBadgeError {{
-            background: rgba(214, 168, 79, 0.12);
-            color: {YELLOW_LIGHT};
-            border: 1px solid rgba(214, 168, 79, 0.35);
-            border-radius: 14px;
-            padding: 7px 12px;
-            font-size: 10px;
-            font-weight: 800;
-        }}
-        QLabel#statusBadgeRunning {{
-            color: {YELLOW_LIGHT};
-        }}
-        QLabel#statusBadgeError {{
-            color: {ERROR};
-            border-color: rgba(229, 115, 115, 0.35);
-            background: rgba(229, 115, 115, 0.08);
-        }}
-        QLabel#authTitle {{
-            color: {TEXT};
-            font-size: 28px;
-            font-weight: 800;
-        }}
-        QLabel#authSubtitle {{
-            color: {MUTED};
-            font-size: 12px;
-        }}
-        QPushButton[principal="true"] {{
-            background: {YELLOW};
-            color: #111111;
+
+        QFrame#separator {{
+            background: #E2DACB;
             border: none;
+            max-height: 1px;
+        }}
+
+        QLabel#sideSection,
+        QLabel#sideCaption {{
+            color: #9B927F;
+            font-size: 9px;
+            font-weight: 900;
+            letter-spacing: 1.6px;
+        }}
+
+        QLabel#sideUser {{
+            color: #25221C;
+            font-size: 13px;
+            font-weight: 900;
+        }}
+
+        QFrame#userCard {{
+            background: #FFFFFF;
+            border: 1px solid #DED6C8;
+            border-radius: 12px;
+        }}
+
+        QPushButton#navButton {{
+            background: transparent;
+            color: #777062;
+            border: 1px solid transparent;
             border-radius: 10px;
-            padding: 0 20px;
+            text-align: left;
+            padding: 0 13px;
             font-size: 12px;
             font-weight: 800;
-            letter-spacing: 0.5px;
         }}
-        QPushButton[principal="true"]:hover {{
-            background: {YELLOW_LIGHT};
+
+        QPushButton#navButton:hover {{
+            background: #F1EBDD;
+            border-color: #E5DCCB;
+            color: #27231C;
         }}
-        QPushButton[principal="true"]:pressed {{
-            background: #B88D3B;
+
+        QPushButton#navButton:pressed {{
+            background: #E9D5A1;
+            color: #5B4215;
         }}
-        QPushButton[principal="true"]:disabled {{
-            background: #4C402A;
-            color: #8D826A;
+
+        /* =========================================================
+           TÍTULOS
+           ========================================================= */
+        QLabel#pageTitle {{
+            color: #191814;
+            font-size: 31px;
+            font-weight: 900;
         }}
-        QPushButton[compacto="true"] {{
-            background: {SURFACE_2};
-            color: {TEXT};
-            border: 1px solid {BORDER};
-            border-radius: 9px;
-            padding: 0 18px;
+
+        QLabel#pageSubtitle {{
+            color: #746D61;
+            font-size: 12px;
+        }}
+
+        /* =========================================================
+           CARDS — flat, sem sombra, bordas técnicas
+           ========================================================= */
+        QFrame#card {{
+            background: #FFFEFB;
+            border: 1px solid #DED6C8;
+            border-radius: 14px;
+        }}
+
+        QLabel#cardNumber {{
+            color: #B17E18;
+            background: transparent;
             font-size: 11px;
+            font-weight: 900;
+            letter-spacing: 2px;
+        }}
+
+        QLabel#cardTitle {{
+            color: #1E1B16;
+            background: transparent;
+            font-size: 17px;
+            font-weight: 900;
+        }}
+
+        QLabel#cardText {{
+            color: #777062;
+            background: transparent;
+            font-size: 11px;
+            line-height: 1.4;
+        }}
+
+        QLabel#eyebrow {{
+            color: #B17E18;
+            background: transparent;
+            font-size: 9px;
+            font-weight: 900;
+            letter-spacing: 2px;
+        }}
+
+        QLabel#fieldLabel {{
+            color: #71695C;
+            background: transparent;
+            font-size: 9px;
+            font-weight: 900;
+            letter-spacing: 1.5px;
+        }}
+
+        QLabel#hint {{
+            color: #7D7568;
+            background: transparent;
+            font-size: 10px;
+            padding: 8px 0;
+        }}
+
+        /* =========================================================
+           CARTÃO ESCURO — status do robô, ao estilo da referência
+           ========================================================= */
+        QFrame#darkCard {{
+            background: #23201A;
+            border: 1px solid #23201A;
+            border-radius: 14px;
+        }}
+
+        QLabel#darkEyebrow {{
+            color: {YELLOW_LIGHT};
+            background: transparent;
+            font-size: 9px;
+            font-weight: 900;
+            letter-spacing: 2px;
+        }}
+
+        QLabel#darkValue {{
+            color: #FFFFFF;
+            background: transparent;
+            font-size: 26px;
+            font-weight: 900;
+        }}
+
+        QLabel#darkCaption {{
+            color: #C9C2B4;
+            background: transparent;
+            font-size: 11px;
+        }}
+
+        QLabel#darkFoot {{
+            color: #8B8478;
+            background: transparent;
+            font-size: 10px;
             font-weight: 700;
         }}
-        QPushButton[compacto="true"]:hover {{
+
+        /* =========================================================
+           LISTA DE ARQUIVOS — linhas clicáveis
+           ========================================================= */
+        QFrame#fileRow {{
+            background: #FBF8F1;
+            border: 1px solid #E7E0D2;
+            border-radius: 10px;
+        }}
+
+        QFrame#fileRow:hover {{
+            background: #F6EFDD;
             border-color: {YELLOW};
-            color: {YELLOW_LIGHT};
         }}
+
+        QLabel#fileName {{
+            color: #25221D;
+            background: transparent;
+            font-size: 12px;
+            font-weight: 700;
+        }}
+
+        QLabel#fileMeta {{
+            color: #8A8274;
+            background: transparent;
+            font-size: 10px;
+            font-weight: 700;
+        }}
+
+        QPushButton#toggleSwitch {{
+            border: none;
+            background: transparent;
+        }}
+
+        /* =========================================================
+           STATUS
+           ========================================================= */
+        QLabel#statusBadge,
+        QLabel#statusBadgeRunning,
+        QLabel#statusBadgeError {{
+            background: #FFF8E5;
+            color: #916A18;
+            border: 1px solid #DDBA62;
+            border-radius: 9px;
+            padding: 6px 11px;
+            font-size: 9px;
+            font-weight: 900;
+            letter-spacing: 0.8px;
+        }}
+
+        QLabel#statusBadgeRunning {{
+            background: #FFF4D1;
+            color: #8B6415;
+        }}
+
+        QLabel#statusBadgeError {{
+            color: #B94D4D;
+            border-color: #DFAAAA;
+            background: #FFF1F1;
+        }}
+
+        /* =========================================================
+           BOTÕES
+           ========================================================= */
+        QPushButton[principal="true"] {{
+            background: #D5A63A;
+            color: #201A0F;
+            border: 1px solid #C2942D;
+            border-radius: 10px;
+            padding: 0 20px;
+            font-size: 11px;
+            font-weight: 900;
+            letter-spacing: 0.8px;
+        }}
+
+        QPushButton[principal="true"]:hover {{
+            background: #E2B74D;
+            border-color: #B98720;
+        }}
+
+        QPushButton[principal="true"]:pressed {{
+            background: #BD8C27;
+        }}
+
+        QPushButton[principal="true"]:disabled {{
+            background: #D9CCAA;
+            color: #8E8368;
+            border-color: #D0C3A3;
+        }}
+
+        QPushButton[compacto="true"] {{
+            background: #FFFEFB;
+            color: #4D473D;
+            border: 1px solid #D7CEBE;
+            border-radius: 9px;
+            padding: 0 17px;
+            font-size: 10px;
+            font-weight: 900;
+        }}
+
+        QPushButton[compacto="true"]:hover {{
+            background: #F8F0DF;
+            color: #6C4F16;
+            border-color: #CFA544;
+        }}
+
         QPushButton[compacto="true"]:disabled {{
-            color: #5C5A55;
+            color: #B5AD9E;
+            border-color: #E1DBCF;
         }}
+
         QPushButton#linkButton {{
             background: transparent;
             border: none;
-            color: {YELLOW};
-            font-size: 11px;
-            font-weight: 600;
-            padding: 8px;
+            color: #A47519;
+            font-size: 10px;
+            font-weight: 800;
+            padding: 7px;
         }}
+
         QPushButton#linkButton:hover {{
-            color: {YELLOW_LIGHT};
+            color: #765310;
         }}
+
+        /* =========================================================
+           CAMPOS
+           ========================================================= */
+        QLineEdit {{
+            background: #FFFFFF;
+            color: #25221D;
+            border: 1px solid #D9D1C3;
+            border-radius: 10px;
+            padding: 0 14px;
+            font-size: 13px;
+        }}
+
+        QLineEdit:hover,
+        QLineEdit:focus {{
+            background: #FFFEFB;
+            border: 1px solid #C99A35;
+        }}
+
+        QComboBox {{
+            background: #FFFFFF;
+            color: #25221D;
+            border: 1px solid #D9D1C3;
+            border-radius: 10px;
+            padding: 0 14px;
+            font-size: 13px;
+        }}
+
+        QComboBox:hover,
+        QComboBox:focus {{
+            background: #FFFEFB;
+            border: 1px solid #C99A35;
+        }}
+
+        QComboBox::drop-down {{
+            border: none;
+            width: 34px;
+        }}
+
+        QComboBox QAbstractItemView {{
+            background: #FFFFFF;
+            color: #25221D;
+            border: 1px solid #D9D1C3;
+            selection-background-color: #D5A63A;
+            selection-color: #201A0F;
+            padding: 5px;
+        }}
+
+        /* =========================================================
+           LOGIN / CADASTRO
+           ========================================================= */
+        QLabel#authTitle {{
+            color: #191814;
+            background: transparent;
+            font-size: 28px;
+            font-weight: 900;
+        }}
+
+        QLabel#authSubtitle {{
+            color: #756D61;
+            background: transparent;
+            font-size: 12px;
+        }}
+
+        /* =========================================================
+           EXECUÇÃO / LOG
+           ========================================================= */
         QTextEdit#logConsole {{
-            background: #080808;
-            color: #D9D3C8;
-            border: 1px solid #202020;
+            background: #FAF8F2;
+            color: #49443B;
+            border: 1px solid #D9D1C3;
             border-radius: 10px;
             padding: 12px;
             font-family: "Cascadia Mono", "Consolas", monospace;
             font-size: 11px;
-            selection-background-color: {YELLOW};
-            selection-color: #111111;
+            selection-background-color: #D5A63A;
+            selection-color: #201A0F;
         }}
+
         QLabel#logCounter {{
-            color: {MUTED};
-            font-size: 10px;
+            color: #81786B;
+            background: transparent;
+            font-size: 9px;
         }}
+
         QLabel#periodValue {{
-            color: {YELLOW_LIGHT};
-            font-size: 17px;
-            font-weight: 800;
+            color: #9A6D15;
+            background: transparent;
+            font-size: 16px;
+            font-weight: 900;
         }}
+
         QLabel#resultPath {{
-            color: {SUCCESS};
+            color: #4B916C;
+            background: transparent;
             font-size: 10px;
-            font-weight: 700;
+            font-weight: 900;
         }}
+
         QLabel#storagePath {{
-            color: {MUTED};
+            color: #777063;
+            background: transparent;
+            font-size: 9px;
+        }}
+
+        QLabel#flowNumber {{
+            color: #B17E18;
+            background: transparent;
+            font-size: 10px;
+            font-weight: 900;
+        }}
+
+        QLabel#flowText {{
+            color: #332F28;
+            background: transparent;
             font-size: 10px;
         }}
-        QLabel#flowNumber {{
-            color: {YELLOW};
-            font-size: 11px;
-            font-weight: 800;
-        }}
-        QLabel#flowText {{
-            color: {TEXT};
-            font-size: 11px;
-        }}
+
+        /* =========================================================
+           SCROLLBAR
+           ========================================================= */
         QScrollBar:vertical {{
-            background: #0C0C0C;
-            width: 8px;
+            background: #EEE8DC;
+            width: 7px;
             margin: 0;
+            border: none;
         }}
+
         QScrollBar::handle:vertical {{
-            background: #3A3833;
-            border-radius: 4px;
-            min-height: 30px;
+            background: #CDBFA8;
+            border-radius: 3px;
+            min-height: 28px;
         }}
+
         QScrollBar::handle:vertical:hover {{
-            background: {YELLOW};
+            background: #D5A63A;
         }}
+
+        /* =========================================================
+           DIÁLOGOS
+           ========================================================= */
+        QDialog {{
+            background: #FBF9F4;
+        }}
+
+        QLabel#dialogTitle {{
+            color: #191814;
+            background: transparent;
+        }}
+
+        QLabel#dialogText {{
+            color: #756D61;
+            background: transparent;
+        }}
+
+        QPushButton#dialogPrimary {{
+            background: #D5A63A;
+            color: #201A0F;
+            border: 1px solid #C2942D;
+            border-radius: 9px;
+            padding: 8px 20px;
+            min-height: 42px;
+            font-weight: 900;
+        }}
+
         QMessageBox {{
-            background: {SURFACE};
+            background: #FFFEFB;
         }}
+
         QMessageBox QLabel {{
-            color: {TEXT};
+            color: #25221D;
+            background: transparent;
             font-size: 13px;
         }}
+
         QMessageBox QPushButton {{
-            background: {YELLOW};
-            color: #111111;
-            border: none;
+            background: #D5A63A;
+            color: #201A0F;
+            border: 1px solid #C2942D;
             border-radius: 8px;
             padding: 8px 18px;
             min-width: 80px;
-            font-weight: 700;
+            font-weight: 900;
         }}
         """
     )
