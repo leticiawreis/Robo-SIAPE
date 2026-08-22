@@ -1981,6 +1981,8 @@ def aplicar_tema(app):
 def main():
     app = QApplication([])
     app.setApplicationName("Robô SIAPE")
+    
+    
     app.setOrganizationName("Robô SIAPE")
     aplicar_tema(app)
 
