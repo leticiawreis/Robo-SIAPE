@@ -8,6 +8,7 @@ __pycache__/
 # Dados locais e sensíveis
 .env
 usuarios.json
+config.json
 
 # Arquivos temporários
 *.crdownload
