@@ -1,0 +1,27 @@
+# Ambiente Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+
+# Dados locais e sensíveis
+.env
+usuarios.json
+
+# Arquivos temporários
+*.crdownload
+*.zip
+temp/
+tmp/
+
+# Resultados gerados
+saida/
+
+# IDEs
+.vscode/
+.idea/
+
+# Sistema operacional
+Thumbs.db
+.DS_Store
