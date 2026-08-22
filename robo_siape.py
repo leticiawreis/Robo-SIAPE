@@ -969,4 +969,3 @@ def executar_pipeline_completo(
             handler.flush()
             handler.close()
             logger.removeHandler(handler)
-
