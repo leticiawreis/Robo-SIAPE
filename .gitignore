@@ -9,6 +9,7 @@ __pycache__/
 .env
 usuarios.json
 config.json
+historico_execucoes.json
 
 # Arquivos temporários
 *.crdownload
