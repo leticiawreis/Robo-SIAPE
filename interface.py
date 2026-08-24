@@ -653,7 +653,7 @@ class App(QMainWindow):
         layout.addWidget(self.user_card)
 
         sair = self._nav_button("↪", "Sair")
-        sair.clicked.connect(self.tela_login)
+        sair.clicked.connect(self.fazer_logout)
         layout.addWidget(sair)
 
         return sidebar
@@ -668,6 +668,11 @@ class App(QMainWindow):
 
     def _definir_usuario(self):
         self.side_user.setText(self.usuario_logado or "—")
+
+    def fazer_logout(self):
+        self.usuario_logado = None
+        self.worker = None
+        self.tela_login()
 
     def limpar_tela(self):
         while self.tela.count():
@@ -718,7 +723,7 @@ class App(QMainWindow):
         logo = LogoMark()
         card_layout.addWidget(logo, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        titulo = QLabel("Bem-vindo de volta")
+        titulo = QLabel("Bem-vindo")
         titulo.setObjectName("authTitle")
         titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card_layout.addWidget(titulo)
@@ -894,22 +899,14 @@ class App(QMainWindow):
         layout.addLayout(linha1)
 
         # ---------------------------------------------------------------
-        # Linha 2 — barra de atalhos + preferências (toggles reais)
+        # Linha 2 — arquivos gerados + preferências + indicadores
         # ---------------------------------------------------------------
         linha2 = QHBoxLayout()
         linha2.setSpacing(14)
-        linha2.addWidget(self._barra_atalhos(), 3)
+        linha2.addWidget(self._card_arquivos(), 2)
         linha2.addWidget(self._painel_preferencias(), 1)
+        linha2.addWidget(self._card_gauges(), 1)
         layout.addLayout(linha2)
-
-        # ---------------------------------------------------------------
-        # Linha 3 — arquivos gerados + indicadores (gauges reais)
-        # ---------------------------------------------------------------
-        linha3 = QHBoxLayout()
-        linha3.setSpacing(14)
-        linha3.addWidget(self._card_arquivos(), 2)
-        linha3.addWidget(self._card_gauges(), 1)
-        layout.addLayout(linha3)
 
         # ---------------------------------------------------------------
         # Chamada para nova execução
@@ -1046,28 +1043,11 @@ class App(QMainWindow):
         atualizar.clicked.connect(self.tela_principal)
         lay.addWidget(atualizar)
 
-        lay.addStretch()
-        return card
-
-    def _barra_atalhos(self):
-        card = Card()
-        lay = QHBoxLayout(card)
-        lay.setContentsMargins(18, 12, 18, 12)
-        lay.setSpacing(10)
-
-        atalhos = [
-            ("📄  Resumo", self.tela_principal),
-            ("▶  Nova execução", self.tela_config_robo),
-            ("📂  Pasta de saída", self.abrir_pasta_saida),
-            ("👤  Perfil", lambda: self._mensagem(
-                "Usuário", f"Conectado como: {self.usuario_logado or '—'}", "info"
-            )),
-            ("⟳  Atualizar", self.tela_principal),
-        ]
-        for texto, acao in atalhos:
-            botao = Botao(texto, compacto=True)
-            botao.clicked.connect(acao)
-            lay.addWidget(botao)
+        perfil = Botao("👤  Perfil", compacto=True)
+        perfil.clicked.connect(lambda: self._mensagem(
+            "Usuário", f"Conectado como: {self.usuario_logado or '—'}", "info"
+        ))
+        lay.addWidget(perfil)
 
         lay.addStretch()
         return card
@@ -1635,13 +1615,13 @@ def aplicar_tema(app):
            CARTÃO ESCURO — status do robô, ao estilo da referência
            ========================================================= */
         QFrame#darkCard {{
-            background: #23201A;
-            border: 1px solid #23201A;
+            background: {YELLOW};
+            border: 1px solid #C2942D;
             border-radius: 14px;
         }}
 
         QLabel#darkEyebrow {{
-            color: {YELLOW_LIGHT};
+            color: #5B4215;
             background: transparent;
             font-size: 9px;
             font-weight: 900;
@@ -1649,20 +1629,20 @@ def aplicar_tema(app):
         }}
 
         QLabel#darkValue {{
-            color: #FFFFFF;
+            color: #201A0F;
             background: transparent;
             font-size: 26px;
             font-weight: 900;
         }}
 
         QLabel#darkCaption {{
-            color: #C9C2B4;
+            color: #4A3B1B;
             background: transparent;
             font-size: 11px;
         }}
 
         QLabel#darkFoot {{
-            color: #8B8478;
+            color: #6B5726;
             background: transparent;
             font-size: 10px;
             font-weight: 700;
