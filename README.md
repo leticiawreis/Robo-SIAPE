@@ -392,7 +392,7 @@ limpeza final
 Isso facilita manutenção, testes e identificação de erros.
 
 
-##Uso de Inteligência Artificial
+## Uso de Inteligência Artificial
 
 Utilizei ferramentas de IA como apoio ao longo do desenvolvimento. A lógica, a estrutura do projeto e as decisões de implementação foram feitas por mim; a IA foi usada como ferramenta de auxílio nos seguintes pontos:
 
