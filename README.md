@@ -71,6 +71,7 @@ Limpeza dos arquivos temporários
 - Limpeza dos arquivos temporários após a execução.
 - Criação de uma pasta exclusiva para cada execução.
 - Interface gráfica em PyQt6, com login local, painel de controle, histórico de execuções e configurações do usuário.
+- Diálogo de ajuda passo a passo, com prints reais da interface anotados (setas/realces) mostrando onde clicar.
 - Empacotamento em executável (`.exe`) via PyInstaller, funcionando sem precisar do Python instalado na máquina de destino.
 
 ## Pacote utilizado
@@ -198,14 +199,22 @@ O projeto tem três "camadas" diferentes de arquivos: o que é código-fonte (ve
 ├── README.md
 ├── requirements.txt
 ├── .gitignore
-└── .env.example
+├── .env.example
+└── assets/
+    └── ajuda/
+        ├── passo1_painel.png
+        ├── passo2_periodo.png
+        └── passo3_iniciar.png
 ```
 
 Apenas código-fonte, documentação e arquivos de configuração de exemplo. Nada gerado por build ou execução é versionado — tudo isso está listado no `.gitignore`.
 
+> Essa é a estrutura da branch `main`. A branch `dev` acrescenta apenas o
+> `teste.py`, usado para estressar o robô — ver [Testes (branch dev)](#testes-branch-dev).
+
 #### `interface.py`
 
-Responsável pela interface gráfica da aplicação (PyQt6) e pela interação com o usuário: login local, cadastro, seleção de ano/mês, painel de controle com histórico e indicadores, acompanhamento da execução em tempo real e exibição dos logs.
+Responsável pela interface gráfica da aplicação (PyQt6) e pela interação com o usuário: login local, cadastro, seleção de ano/mês, painel de controle com histórico e indicadores, acompanhamento da execução em tempo real, exibição dos logs e o diálogo de ajuda passo a passo (ver `assets/ajuda/` abaixo).
 
 #### `robo_siape.py`
 
@@ -227,6 +236,12 @@ Impede que ambientes virtuais, arquivos temporários, logs, configurações loca
 
 Modelo de variáveis de ambiente do projeto, sem armazenar segredos ou credenciais reais. Pode ser versionado normalmente.
 
+#### `assets/ajuda/`
+
+Prints reais da própria interface, já anotados com setas e círculos numerados indicando onde clicar. São usados pelo diálogo de ajuda (botão **"？ Ajuda"** no painel), que mostra esses três passos — iniciar uma nova execução, escolher o período e clicar em "INICIAR ROBÔ" — de forma navegável (Anterior/Próximo).
+
+Rodando via `python interface.py`, precisa estar na mesma pasta que `interface.py` (ao lado dele), com esses nomes de arquivo exatos. Rodando como `.exe`, essa pasta já vai embutida dentro do executável — ver [Gerando o executável](#gerando-o-executável-exe). Em ambos os casos, se as imagens não forem encontradas, o diálogo apenas mostra um aviso de "imagem não encontrada" no lugar do print, em vez de quebrar.
+
 ### 2. Pasta após rodar o `build.py` (gera o `.exe`)
 
 ```text
@@ -243,12 +258,19 @@ Robo-SIAPE/
 ├── README.md
 ├── requirements.txt
 ├── .gitignore
-└── .env.example
+├── .env.example
+└── assets/
+    └── ajuda/
+        ├── passo1_painel.png
+        ├── passo2_periodo.png
+        └── passo3_iniciar.png
 ```
 
 `build/`, `dist/`, `RoboSIAPE.spec`, `version_info.txt` e `saida/` não são versionados.
 
 A pasta `saida/` já aparece aqui porque é criada assim que a interface abre (independente de já ter rodado o robô). O caminho é resolvido de forma que a `saida/` sempre nasça na **raiz do projeto** (`Robo-SIAPE/`), nunca dentro de `dist/`, mesmo o `.exe` estando lá dentro — isso vale tanto rodando o `.exe` quanto rodando via `python interface.py`.
+
+A pasta `assets/` continua na raiz porque é a partir dela que o `build.py` embute os prints **dentro do próprio** `RoboSIAPE.exe` (veja a nota sobre `--add-data` em [Gerando o executável](#gerando-o-executável-exe)) — não é preciso copiá-la manualmente para `dist/`.
 
 ### 3. Dentro de `saida/` após uma execução
 
@@ -321,9 +343,44 @@ Com as dependências instaladas (incluindo `pyinstaller`), rode:
 python build.py
 ```
 
-O executável final fica em `dist/RoboSIAPE.exe`. Basta copiar/mover o projeto inteiro (ou pelo menos a pasta `dist/` junto da raiz do projeto) para a máquina de destino e executar o `.exe` — não é necessário ter Python instalado nela.
+O executável final fica em `dist/RoboSIAPE.exe`. Basta copiar/mover **só o `.exe`** para a máquina de destino e executar — não é necessário levar o projeto inteiro, nem ter Python instalado nela.
+
+> **Prints do diálogo de ajuda embutidos no `.exe`:** se a pasta `assets/ajuda/` existir na raiz do projeto no momento do build, o `build.py` a embute dentro do próprio executável (via `--add-data` do PyInstaller). Em tempo de execução, o `.exe` extrai esses arquivos para uma pasta temporária (`sys._MEIPASS`) e o diálogo de ajuda os lê de lá — por isso não é preciso distribuir a pasta `assets/` separadamente junto com o `.exe`. Se `assets/ajuda/` não existir na hora do build, o `build.py` avisa no terminal e gera o `.exe` normalmente, só que sem os prints (o diálogo de ajuda mostra um aviso no lugar deles).
 
 > **Nota sobre antivírus/SmartScreen:** executáveis gerados por PyInstaller sem assinatura digital podem ser sinalizados como suspeitos pelo Windows Defender/SmartScreen na primeira execução. Isso é um falso positivo comum desse tipo de empacotamento, não um problema no código. O `build.py` já toma algumas medidas para reduzir esse risco (sem compressão UPX, com metadados de versão no executável).
+
+## Testes (branch `dev`)
+
+> ⚠️ `teste.py` existe **apenas na branch `dev`** — não faz parte do código
+> enviado para `main`/produção, e não deve ser mesclado para lá.
+
+`teste.py` não é um teste unitário: ele roda o **pipeline completo**
+(`executar_pipeline_completo`) para **todas** as combinações de ano/mês
+conhecidas em `INDICES_ANOS`, uma atrás da outra, com o objetivo de
+**estressar o robô** — verificar se ele se comporta bem numa bateria grande
+de execuções reais, e não travar/quebrar em algum período específico.
+
+Para rodar (a partir da branch `dev`, na raiz do projeto, junto de
+`interface.py` e `robo_siape.py`):
+
+```bash
+python teste.py
+```
+
+Pontos de atenção:
+
+- Ele baixa **de verdade** cada pacote disponível — pode demorar bastante e
+  consumir banda, dependendo de quantos anos/meses existirem.
+- Cada execução bem-sucedida gera uma pasta em `saida/`, exatamente como uma
+  execução normal feita pela interface. Se quiser, apague `saida/` depois.
+- Para restringir o teste a um intervalo específico (em vez de todos os
+  anos), edite `ANOS_PARA_TESTAR` no topo do arquivo — ex.:
+  `ANOS_PARA_TESTAR = ["2024", "2025", "2026"]`.
+- Há uma pausa de `PAUSA_ENTRE_TESTES_SEGUNDOS` (padrão: 3s) entre uma
+  execução e outra, para não sobrecarregar o servidor.
+- Ao final, imprime um resumo agrupado por status (sucesso, sem dado
+  publicado, período inválido, erro inesperado) e salva um log completo em
+  `teste_todos_meses_<data>_<hora>.log`, na raiz do projeto.
 
 ## Requisitos
 

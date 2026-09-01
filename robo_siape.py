@@ -26,6 +26,9 @@ def _obter_pasta_base():
     dentro de dist/ (ex.: Robo-SIAPE/dist/RoboSIAPE.exe) — então subimos
     mais um nível a partir do .exe para chegar na raiz do projeto
     (Robo-SIAPE/), em vez de deixar a saida/ nascer dentro de dist/.
+
+    Retorna:
+        str: caminho absoluto da pasta raiz do projeto.
     """
     if getattr(sys, "frozen", False):
         pasta_dist = os.path.dirname(os.path.abspath(sys.executable))
@@ -74,11 +77,39 @@ CABECALHOS_HTTP = {
 
 
 class QueueLogHandler(logging.Handler):
+    """Handler customizado do módulo `logging` que, em vez de escrever em
+    arquivo ou console, envia cada mensagem de log formatada para uma
+    fila (queue.Queue) fornecida na criação.
+
+    É assim que os logs do pipeline (que roda em uma thread de trabalho)
+    chegam em tempo real até a interface gráfica, que consome essa fila
+    e exibe as mensagens no console de log da tela de execução.
+    """
+
     def __init__(self, log_queue):
+        """Guarda a referência da fila onde as mensagens de log serão
+        colocadas.
+
+        Parâmetros:
+            log_queue (queue.Queue): fila compartilhada com o
+                consumidor (ex: a interface gráfica).
+        """
         super().__init__()
         self.log_queue = log_queue
 
     def emit(self, record):
+        """Formata o registro de log recebido e o coloca na fila, como
+        uma tupla ("log", mensagem_formatada).
+
+        Chamado automaticamente pelo framework `logging` sempre que uma
+        mensagem é registrada através de um logger que usa este handler.
+        Se ocorrer algum erro ao formatar/enfileirar, delega o
+        tratamento ao mecanismo padrão de erro do `logging`
+        (self.handleError).
+
+        Parâmetros:
+            record (logging.LogRecord): registro de log a ser emitido.
+        """
         try:
             mensagem = self.format(record)
             self.log_queue.put(("log", mensagem))
@@ -87,6 +118,21 @@ class QueueLogHandler(logging.Handler):
 
 
 def meses_disponiveis(ano):
+    """Retorna a lista de meses que podem ser selecionados para um
+    determinado ano.
+
+    Para o ano corrente (2026), retorna apenas os meses já decorridos/
+    disponíveis (definidos em MESES_2026), já que meses futuros não
+    teriam dados publicados. Para os demais anos, retorna todos os 12
+    meses do ano.
+
+    Parâmetros:
+        ano (str): ano a consultar (ex: "2026").
+
+    Retorna:
+        list[str]: lista de nomes de meses (por extenso, em minúsculas)
+        disponíveis para aquele ano.
+    """
     if ano == "2026":
         return [mes for mes in MESES_OPCOES if mes in MESES_2026]
 
@@ -99,6 +145,15 @@ def criar_pasta_execucao(ano, mes):
     Mesmo repetindo o mesmo ano/mês, a pasta nunca é reaproveitada nem
     sobrescrita — o nome carrega um carimbo de data/hora e, no
     improvável caso de colisão no mesmo segundo, ganha um sufixo extra.
+
+    Parâmetros:
+        ano (str): ano da execução.
+        mes (str): mês da execução, por extenso (usado para obter o
+            número do mês via MESES_OPCOES).
+
+    Retorna:
+        str: caminho absoluto da pasta recém-criada para esta execução,
+        dentro de PASTA_SAIDA.
     """
     marca_tempo = datetime.now().strftime("%Y%m%d_%H%M%S")
     nome_base = f"{ano}-{MESES_OPCOES[mes]:02d}_{marca_tempo}"
@@ -114,6 +169,29 @@ def criar_pasta_execucao(ano, mes):
 
 
 def configurar_logger(ano, mes, log_queue, pasta_execucao):
+    """Cria e configura um logger dedicado a uma única execução do
+    pipeline, com dois destinos simultâneos para cada mensagem:
+    1. Um arquivo de log (.log) dentro da pasta desta execução.
+    2. A fila fornecida (log_queue), via QueueLogHandler, para que a
+       interface gráfica exiba as mensagens em tempo real.
+
+    O logger recebe um nome único baseado em `id(log_queue)` para evitar
+    conflito entre execuções concorrentes/sucessivas, e quaisquer
+    handlers pré-existentes nesse logger são removidos antes de
+    adicionar os novos (para não duplicar mensagens em reexecuções).
+
+    Parâmetros:
+        ano (str): ano da execução (usado no nome do arquivo de log).
+        mes (str): mês da execução, por extenso.
+        log_queue (queue.Queue): fila para onde as mensagens também
+            serão enviadas em tempo real.
+        pasta_execucao (str): pasta desta execução, onde o arquivo de
+            log será salvo.
+
+    Retorna:
+        tuple: (logger, caminho_log) — o logger configurado, pronto
+        para uso, e o caminho completo do arquivo de log criado.
+    """
     caminho_log = os.path.join(
         pasta_execucao,
         f"execucao_{ano}_{MESES_OPCOES[mes]:02d}.log"
@@ -149,12 +227,27 @@ def configurar_logger(ano, mes, log_queue, pasta_execucao):
 
 
 def criar_pasta_trabalho():
+    """Cria uma pasta temporária exclusiva para o download do pacote
+    ZIP desta execução (usando o diretório temporário do sistema
+    operacional).
+
+    Retorna:
+        str: caminho absoluto da pasta temporária criada, com o prefixo
+        "robo_siape_".
+    """
     return tempfile.mkdtemp(
         prefix="robo_siape_"
     )
 
 
 def limpar_pasta_trabalho(pasta):
+    """Remove (recursivamente) a pasta de trabalho temporária, se ela
+    existir, ignorando erros durante a remoção (ex: arquivos em uso).
+
+    Parâmetros:
+        pasta (str): caminho da pasta a remover. Se for None ou não
+            existir, a função não faz nada.
+    """
     if pasta and os.path.exists(pasta):
         shutil.rmtree(pasta, ignore_errors=True)
 
@@ -168,6 +261,30 @@ def baixar_pacote(ano, mes, tipo, pasta_destino, logger):
     Tenta primeiro o link "oficial" da página de download e, se ele falhar,
     tenta o endereço estático da CGU (destino do redirecionamento), que
     costuma escapar de bloqueios de WAF.
+
+    Durante o download, grava o conteúdo em um arquivo parcial
+    (extensão ".parcial") em blocos de 512 KB, registrando no log o
+    progresso a cada 10% (quando o tamanho total é informado pelo
+    servidor). Ao final, valida se o conteúdo baixado é de fato um ZIP
+    válido antes de renomear o arquivo parcial para o nome final.
+
+    Parâmetros:
+        ano (str): ano da competência a baixar.
+        mes (str): mês da competência, por extenso.
+        tipo (str): tipo do pacote de dados (ex: "Servidores_SIAPE").
+        pasta_destino (str): pasta onde o arquivo ZIP baixado será salvo.
+        logger (logging.Logger): logger usado para registrar o progresso
+            e eventuais falhas do download.
+
+    Retorna:
+        str: caminho completo do arquivo ZIP baixado com sucesso.
+
+    Levanta:
+        FileNotFoundError: se o servidor responder 404 (pacote não
+            publicado para essa competência) — nesse caso não adianta
+            tentar o segundo endereço.
+        RuntimeError: se todas as tentativas de endereço falharem por
+            outros motivos (erro de rede, conteúdo inválido, etc.).
     """
     competencia = f"{ano}{MESES_OPCOES[mes]:02d}"
     nome_do_pacote = f"{competencia}_{tipo}"
@@ -242,6 +359,34 @@ def baixar_pacote(ano, mes, tipo, pasta_destino, logger):
 
 
 def baixar_com_retentativas(ano, mes, tipo, logger):
+    """Executa o download do pacote (baixar_pacote) com retentativas
+    automáticas em caso de falha, até MAX_TENTATIVAS_DOWNLOAD vezes,
+    aguardando 2 segundos entre cada tentativa.
+
+    Cria uma pasta de trabalho temporária antes de tentar o download.
+    Se o erro for FileNotFoundError (pacote não existe para aquela
+    competência), interrompe imediatamente sem novas tentativas — não
+    faz sentido tentar de novo algo que não foi publicado. Se todas as
+    tentativas se esgotarem por outros motivos, limpa a pasta de
+    trabalho e relança o erro como RuntimeError.
+
+    Parâmetros:
+        ano (str): ano da competência a baixar.
+        mes (str): mês da competência, por extenso.
+        tipo (str): tipo do pacote de dados.
+        logger (logging.Logger): logger para registrar cada tentativa.
+
+    Retorna:
+        tuple: (arquivo, pasta_download) — caminho do ZIP baixado com
+        sucesso e caminho da pasta de trabalho temporária usada (que
+        deve ser limpa posteriormente pelo chamador).
+
+    Levanta:
+        FileNotFoundError: se o pacote não estiver publicado para a
+            competência solicitada.
+        RuntimeError: se o download falhar em todas as tentativas por
+            outros motivos.
+    """
     pasta_download = criar_pasta_trabalho()
 
     for tentativa in range(1, MAX_TENTATIVAS_DOWNLOAD + 1):
@@ -290,6 +435,24 @@ def baixar_com_retentativas(ano, mes, tipo, logger):
 # TRATAMENTO DO CSV / GERAÇÃO DO EXCEL
 # =====================================================================
 def encontrar_arquivo_remuneracao(pasta_extraida):
+    """Procura, dentro da pasta onde o ZIP foi extraído, o arquivo CSV
+    que contém os dados de remuneração dos servidores.
+
+    Percorre recursivamente a pasta procurando arquivos cujo nome
+    (ignorando maiúsculas/minúsculas) contenha "remuneracao" ou
+    "remuneração" e termine em ".csv".
+
+    Parâmetros:
+        pasta_extraida (str): pasta onde o conteúdo do ZIP foi
+            extraído.
+
+    Retorna:
+        str: caminho completo do primeiro CSV de remuneração encontrado.
+
+    Levanta:
+        FileNotFoundError: se nenhum arquivo correspondente for
+            encontrado dentro da pasta.
+    """
     candidatos = []
 
     for raiz, _, arquivos in os.walk(pasta_extraida):
@@ -309,6 +472,29 @@ def encontrar_arquivo_remuneracao(pasta_extraida):
 
 
 def preparar_csv(caminho):
+    """Abre o arquivo CSV testando várias codificações (encodings) até
+    encontrar uma que consiga ler o conteúdo sem erro, já que os
+    arquivos do Portal da Transparência podem vir em codificações
+    diferentes (UTF-8 com/sem BOM, CP1252, Latin-1).
+
+    Tenta, nesta ordem: "utf-8-sig", "utf-8", "cp1252", "latin1". Para
+    cada uma, tenta ler um trecho inicial do arquivo (4096 bytes) como
+    teste; se não houver erro de decodificação, retorna o arquivo já
+    reposicionado no início, junto com um leitor CSV configurado com
+    delimitador ";".
+
+    Parâmetros:
+        caminho (str): caminho do arquivo CSV a abrir.
+
+    Retorna:
+        tuple: (arquivo, leitor) — o objeto de arquivo aberto (que deve
+        ser fechado pelo chamador) e o csv.reader pronto para iterar
+        sobre as linhas.
+
+    Levanta:
+        UnicodeDecodeError: se nenhuma das codificações testadas
+            conseguir ler o arquivo.
+    """
     encodings = ("utf-8-sig", "utf-8", "cp1252", "latin1")
 
     ultimo_erro = None
@@ -348,11 +534,44 @@ def preparar_csv(caminho):
 
 
 def coluna_vazia(valor):
+    """Verifica se um valor de célula deve ser considerado "vazio" para
+    fins de tratamento (None ou string composta só de espaços).
+
+    Parâmetros:
+        valor: valor da célula a verificar (geralmente str ou None).
+
+    Retorna:
+        bool: True se o valor for considerado vazio, False caso
+        contrário.
+    """
     return valor is None or str(valor).strip() == ""
 
 
-
 def identificar_colunas_validas(caminho_csv, logger):
+    """Faz uma primeira passada pelo CSV para identificar quais colunas
+    realmente possuem algum dado preenchido em pelo menos uma linha, e
+    quantas linhas não estão totalmente vazias.
+
+    Colunas que estão vazias em todas as linhas do arquivo são
+    descartadas do resultado — elas não farão parte da planilha final,
+    evitando colunas inúteis no Excel gerado. Linhas totalmente vazias
+    (todas as colunas vazias) não são contabilizadas em `total_linhas`.
+
+    Parâmetros:
+        caminho_csv (str): caminho do CSV de remuneração a analisar.
+        logger (logging.Logger): logger usado para registrar quantas
+            colunas válidas e quantos registros foram encontrados.
+
+    Retorna:
+        tuple: (cabecalho_limpo, colunas_validas) — cabecalho_limpo é a
+        lista dos nomes das colunas que possuem dados (na ordem
+        original); colunas_validas é a lista dos índices originais
+        dessas colunas no CSV, usada posteriormente para filtrar cada
+        linha de dados.
+
+    Levanta:
+        ValueError: se o CSV estiver vazio (sem sequer um cabeçalho).
+    """
     arquivo, leitor = preparar_csv(caminho_csv)
 
     try:
@@ -404,6 +623,25 @@ def identificar_colunas_validas(caminho_csv, logger):
 
 
 def converter_valor_monetario(valor):
+    """Converte um texto de valor monetário (no formato brasileiro,
+    ex: "1.234,56" ou "R$ 1.234,56") para um número float, para que
+    possa ser gravado na planilha como número (e não como texto) e
+    formatado como moeda.
+
+    Trata dois formatos possíveis:
+    - Formato brasileiro com vírgula decimal (ex: "1.234,56"): remove
+      os pontos de milhar e troca a vírgula por ponto decimal.
+    - Formato sem vírgula, mas com múltiplos pontos (ex: "1.234.567"):
+      remove todos os pontos, tratando-os como separadores de milhar.
+
+    Parâmetros:
+        valor: texto (ou None) a converter.
+
+    Retorna:
+        float | None: o valor numérico convertido, ou None se o valor
+        de entrada for None, vazio, ou não puder ser convertido para
+        número.
+    """
     if valor is None:
         return None
 
@@ -432,6 +670,24 @@ def converter_valor_monetario(valor):
 
 
 def ler_linhas_tratadas(caminho_csv, colunas_validas):
+    """Gerador que percorre o CSV de remuneração linha a linha,
+    descartando linhas totalmente vazias e mantendo, em cada linha,
+    apenas os valores das colunas consideradas válidas (identificadas
+    previamente por identificar_colunas_validas).
+
+    Usar um gerador (yield) em vez de carregar tudo em memória permite
+    processar arquivos muito grandes sem consumir memória excessiva.
+
+    Parâmetros:
+        caminho_csv (str): caminho do CSV de remuneração.
+        colunas_validas (list[int]): índices das colunas (no CSV
+            original) que devem ser mantidas em cada linha de saída.
+
+    Produz (yield):
+        list: valores da linha, já filtrados para conter apenas as
+        colunas válidas, na mesma ordem de colunas_validas. Colunas
+        vazias são representadas como string vazia "".
+    """
     arquivo, leitor = preparar_csv(caminho_csv)
 
     try:
@@ -459,7 +715,21 @@ def ler_linhas_tratadas(caminho_csv, colunas_validas):
     finally:
         arquivo.close()
 
+
 def identificar_colunas_monetarias(cabecalho):
+    """Identifica quais colunas do cabeçalho representam valores
+    monetários, com base em seus nomes conterem alguma das palavras-
+    chave em PALAVRAS_MONETARIAS (ex: "remuneração", "gratificação",
+    "irrf", "total" etc.), ignorando maiúsculas/minúsculas.
+
+    Parâmetros:
+        cabecalho (list[str]): lista com os nomes das colunas (já
+            filtradas para as colunas válidas).
+
+    Retorna:
+        set[int]: conjunto com os índices (na lista `cabecalho`) das
+        colunas identificadas como monetárias.
+    """
     return {
         indice
         for indice, nome in enumerate(cabecalho)
@@ -472,6 +742,21 @@ def identificar_colunas_monetarias(cabecalho):
 
 
 def calcular_largura_colunas(cabecalho):
+    """Calcula a largura ideal (em unidades de coluna do Excel) para
+    cada coluna da planilha final, com base em heurísticas sobre o
+    nome da coluna (ex: colunas de nome de pessoa são mais largas,
+    colunas de CPF têm largura fixa menor, colunas monetárias e de
+    data têm larguras específicas), e um cálculo genérico baseado no
+    tamanho do nome da coluna para os demais casos.
+
+    Parâmetros:
+        cabecalho (list[str]): lista com os nomes das colunas da
+            planilha final.
+
+    Retorna:
+        list[int]: lista de larguras, uma por coluna, na mesma ordem do
+        cabecalho.
+    """
     larguras = []
 
     for nome in cabecalho:
@@ -507,7 +792,6 @@ def calcular_largura_colunas(cabecalho):
     return larguras
 
 
-
 def criar_planilha_formatada(
     cabecalho,
     linhas,
@@ -515,6 +799,34 @@ def criar_planilha_formatada(
     caminho_saida,
     logger
 ):
+    """Gera o arquivo Excel (.xlsx) final, já formatado, a partir do
+    cabeçalho, das linhas de dados (tipicamente vindas do gerador
+    ler_linhas_tratadas) e das larguras de coluna calculadas.
+
+    Usa o modo "write_only" do openpyxl (mais eficiente em memória para
+    grandes volumes de dados, pois escreve direto em disco em vez de
+    manter tudo em memória). Aplica formatação ao cabeçalho (negrito,
+    texto branco, fundo azul, alinhamento centralizado, quebra de
+    linha), congela a primeira linha (freeze_panes) e ajusta a largura
+    de cada coluna. Para colunas identificadas como monetárias
+    (identificar_colunas_monetarias), converte o valor para número
+    (converter_valor_monetario) e aplica o formato de moeda
+    (FORMATO_MOEDA); quando a conversão falha, mantém o valor original
+    como texto. Registra no log o progresso a cada 50 mil registros
+    processados e, ao final, define a área de autofiltro cobrindo todos
+    os dados escritos.
+
+    Parâmetros:
+        cabecalho (list[str]): nomes das colunas da planilha.
+        linhas (iterable): iterável (ou gerador) de linhas de dados, na
+            mesma ordem/estrutura do cabeçalho.
+        larguras (list[int]): largura de cada coluna, na mesma ordem do
+            cabeçalho.
+        caminho_saida (str): caminho onde o arquivo .xlsx final será
+            salvo.
+        logger (logging.Logger): logger usado para registrar o
+            progresso e a conclusão da geração da planilha.
+    """
     inicio = time.time()
 
     workbook = Workbook(write_only=True)
@@ -617,7 +929,17 @@ def criar_planilha_formatada(
         segundos
     )
 
+
 def extrair_zip(caminho_zip, pasta_extraida, logger):
+    """Extrai todo o conteúdo do arquivo ZIP baixado para a pasta
+    indicada.
+
+    Parâmetros:
+        caminho_zip (str): caminho do arquivo .zip a extrair.
+        pasta_extraida (str): pasta de destino da extração.
+        logger (logging.Logger): logger usado para registrar o início e
+            a conclusão da extração.
+    """
     logger.info("Extraindo o arquivo ZIP.")
 
     with zipfile.ZipFile(caminho_zip, "r") as zip_ref:
@@ -627,6 +949,23 @@ def extrair_zip(caminho_zip, pasta_extraida, logger):
 
 
 def remover_arquivos_desnecessarios(pasta_extraida, logger):
+    """Remove, da pasta onde o ZIP foi extraído, os arquivos que não são
+    necessários para o processamento (ex: dados de afastamentos,
+    cadastro e observações), mantendo apenas o que é relevante (o CSV
+    de remuneração).
+
+    Um arquivo é considerado desnecessário se seu nome (sem extensão,
+    em minúsculas) contiver alguma das palavras em
+    `nomes_desnecessarios`. Erros ao remover um arquivo específico (ex:
+    permissão negada) são registrados como aviso no log, sem interromper
+    o processo para os demais arquivos.
+
+    Parâmetros:
+        pasta_extraida (str): pasta onde o conteúdo do ZIP foi
+            extraído.
+        logger (logging.Logger): logger usado para registrar cada
+            remoção e a contagem final.
+    """
     nomes_desnecessarios = {
         "afastamentos",
         "cadastro",
@@ -667,6 +1006,25 @@ def remover_arquivos_desnecessarios(pasta_extraida, logger):
 
 
 def validar_periodo(ano, mes, tipo=None):
+    """Valida se o período (ano/mês) solicitado é elegível para
+    execução do pipeline, verificando: se o ano é conhecido
+    (INDICES_ANOS), se o mês é um nome válido (MESES_OPCOES), se o
+    período não está no futuro em relação à data atual, e se o mês está
+    de fato disponível para aquele ano (meses_disponiveis) — relevante
+    para o ano corrente, cujos meses futuros ainda não têm dados
+    publicados.
+
+    Parâmetros:
+        ano (str): ano a validar.
+        mes (str): mês a validar, por extenso.
+        tipo: parâmetro mantido por compatibilidade de assinatura, não
+            utilizado na validação.
+
+    Levanta:
+        ValueError: com uma mensagem explicando o motivo, caso o
+            período seja inválido, esteja no futuro, ou não esteja
+            disponível.
+    """
     if ano not in INDICES_ANOS:
         raise ValueError("Ano inválido.")
 
@@ -686,8 +1044,20 @@ def validar_periodo(ano, mes, tipo=None):
         )
 
 
-
 def limpar_arquivos_extraidos(pasta):
+    """Remove todo o conteúdo (arquivos e subpastas) de dentro da pasta
+    de processamento (PASTA_EXTRAIDA), sem remover a própria pasta —
+    usada para deixar a área de trabalho pronta para a próxima execução,
+    sem acumular dados de execuções anteriores.
+
+    Não faz nada se a pasta informada for None/vazia ou não existir.
+    Erros ao remover itens individuais são silenciosamente ignorados
+    (OSError), para não interromper a limpeza por causa de um único
+    arquivo problemático.
+
+    Parâmetros:
+        pasta (str): caminho da pasta a ser esvaziada.
+    """
     if not pasta or not os.path.isdir(pasta):
         return
 
@@ -701,12 +1071,55 @@ def limpar_arquivos_extraidos(pasta):
         except OSError:
             pass
 
+
 def executar_pipeline_completo(
     ano,
     mes,
     tipo,
     log_queue,
 ):
+    """Orquestra o pipeline completo do Robô SIAPE, do início ao fim:
+    valida o período, cria a pasta e o logger desta execução, baixa o
+    pacote ZIP (com retentativas), extrai seu conteúdo, remove arquivos
+    desnecessários, localiza o CSV de remuneração, preserva uma cópia
+    bruta desse CSV na pasta da execução, identifica as colunas válidas,
+    calcula as larguras de coluna e, por fim, gera a planilha Excel
+    tratada e formatada.
+
+    É a função central chamada pela interface gráfica (através da
+    thread Worker) para efetivamente executar toda a automação.
+
+    Parâmetros:
+        ano (str): ano da competência a processar.
+        mes (str): mês da competência, por extenso.
+        tipo (str): tipo do pacote de dados a baixar (ex:
+            "Servidores_SIAPE").
+        log_queue (queue.Queue): fila usada para repassar mensagens de
+            log em tempo real para quem estiver consumindo (ex: a
+            interface gráfica).
+
+    Retorna:
+        tuple: (caminho_saida, caminho_log) — caminho do arquivo Excel
+        tratado gerado e caminho do arquivo de log desta execução.
+
+    Levanta:
+        ValueError: se o período informado for inválido (via
+            validar_periodo).
+        FileNotFoundError: se o pacote não estiver disponível para
+            download, ou se o CSV de remuneração não for encontrado
+            dentro do ZIP.
+        RuntimeError: se o download falhar após todas as retentativas.
+        Exception: qualquer outra exceção ocorrida durante o
+            processamento é registrada no log (com stack trace) e
+            relançada para o chamador tratar.
+
+    Observações:
+        Em qualquer cenário (sucesso ou falha), a pasta de trabalho
+        temporária do download é removida, o conteúdo da pasta de
+        processamento é limpo, e os handlers do logger desta execução
+        são finalizados (flush + close), evitando vazamento de recursos
+        entre execuções.
+    """
     validar_periodo(ano, mes, tipo)
 
     os.makedirs(PASTA_SAIDA, exist_ok=True)
