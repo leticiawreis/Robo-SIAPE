@@ -643,7 +643,7 @@ class Botao(QPushButton):
     (botão de destaque vs. botão secundário/compacto).
     """
 
-    def __init__(self, texto, principal=False, compacto=False, perigo=False):
+    def __init__(self, texto, principal=False, compacto=False, perigo=False, grande=False):
         """Cria o botão com cursor de mão, altura e propriedades de estilo.
 
         Parâmetros:
@@ -654,13 +654,18 @@ class Botao(QPushButton):
                 botões secundários/ações rápidas).
             perigo (bool): se True, aplica o estilo de alerta (vermelho),
                 usado em ações destrutivas/de interrupção (ex: "Parar").
+            grande (bool): se True (combinado com compacto=True), aumenta
+                altura e fonte do botão — usado quando poucos botões
+                dividem uma barra e podem ocupar mais espaço (ex: barra
+                de atalhos do painel).
         """
         super().__init__(texto)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(38 if compacto else 44)
+        self.setMinimumHeight(56 if grande else (38 if compacto else 44))
         self.setProperty("principal", principal)
         self.setProperty("compacto", compacto)
         self.setProperty("perigo", perigo)
+        self.setProperty("grande", grande)
 
 
 class Card(QFrame):
@@ -1010,13 +1015,9 @@ class DialogoAjuda(QDialog):
         (
             "passo1_painel.png",
             "1. Onde iniciar o robô",
-            "No Painel de controle existem <b>duas formas</b> de começar uma nova "
-            "execução — use a que estiver mais à mão:<br><br>"
-            "&nbsp;&nbsp;<b>A</b> — botão <b>\"Nova execução\"</b>, na barra de atalhos "
-            "logo abaixo dos cartões;<br>"
-            "&nbsp;&nbsp;<b>B</b> — botão <b>\"CONFIGURAR ROBÔ →\"</b>, no card em "
-            "destaque na parte de baixo do painel.<br><br>"
-            "Os dois levam para a mesma tela de configuração da execução.",
+            "No Painel de controle, clique no botão <b>\"CONFIGURAR ROBÔ →\"</b>, "
+            "no card em destaque na parte de baixo do painel.<br><br>"
+            "Ele leva direto para a tela de configuração da execução.",
         ),
         (
             "passo2_periodo.png",
@@ -1031,11 +1032,10 @@ class DialogoAjuda(QDialog):
         (
             "passo3_iniciar.png",
             "3. Iniciar o robô",
-            "Com o ano e o mês escolhidos, clique em <b>\"INICIAR ROBÔ →\"</b> "
-            "<b>(3)</b>.<br><br>"
+            "Com o ano e o mês escolhidos, clique em <b>\"INICIAR ROBÔ →\"</b>.<br><br>"
             "A partir daí o robô baixa o pacote (modo headless, sem abrir "
             "navegador), valida e extrai o ZIP, trata o CSV de remuneração e "
-            "gera a planilha Excel final — com cada etapa registrada em log, "
+            "gera a planilha Excel final, com cada etapa registrada em log, "
             "em tempo real, na tela seguinte.",
         ),
     ]
@@ -1185,8 +1185,15 @@ class App(QMainWindow):
 
         self.setWindowTitle("Robô SIAPE")
         preparar_pastas()
-        self.setMinimumSize(1000, 640)
-        self.resize(1060, 680)
+        self.setMinimumSize(1250, 750) #Não deixa o usuário diminuir a interface
+        self.setMaximumSize(1250, 750) #Não deixa o usuário aumentar a interface
+        self.resize(1250, 750)
+
+        # Remove o botão de maximizar (e o duplo clique na barra de
+        # título que também maximiza): a janela maximizada estava
+        # bugando o layout, então a janela continua redimensionável
+        # normalmente pelas bordas, só não pode mais ser maximizada.
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowMaximizeButtonHint)
 
         self._montar_interface()
         self.tela_login()
@@ -1665,10 +1672,11 @@ class App(QMainWindow):
         left.addWidget(desc)
         dlayout.addLayout(left, 1)
 
-        ajuda = Botao("？  Ajuda", compacto=True)
-        ajuda.clicked.connect(self.abrir_ajuda)
-        dlayout.addWidget(ajuda)
-
+        # O botão de Ajuda que ficava aqui foi removido: já existe o
+        # mesmo atalho na barra "Resumo dos logs / Perfil / Ajuda"
+        # logo acima, e duplicar a ação nos dois lugares não fazia
+        # sentido. Sobra só o botão principal, centralizado
+        # verticalmente neste bloco.
         iniciar = Botao(
             "ACOMPANHAR EXECUÇÃO  →" if em_execucao else "CONFIGURAR ROBÔ  →",
             principal=True,
@@ -1679,7 +1687,7 @@ class App(QMainWindow):
             if em_execucao
             else self.tela_config_robo
         )
-        dlayout.addWidget(iniciar)
+        dlayout.addWidget(iniciar, 0, Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(destaque)
 
@@ -1860,29 +1868,33 @@ class App(QMainWindow):
         dialogo.exec()
 
     def _barra_atalhos(self):
-        """Monta uma barra horizontal de atalhos rápidos (resumo, nova
-        execução, pasta de saída, perfil do usuário e atualizar),
-        exibida em formato de cartão.
+        """Monta uma barra horizontal de atalhos rápidos (resumo dos
+        logs, perfil do usuário e ajuda), exibida em formato de cartão.
+
+        Fica só com ações que não existem em nenhum outro lugar do
+        painel — "Nova execução", "Pasta de saída" e "Atualizar" já
+        aparecem no card de Ações Rápidas, então saíram daqui para não
+        duplicar. Usa o mesmo estilo "compacto" (sem "grande") dos
+        botões do card de Ações Rápidas, para manter a mesma altura e
+        peso visual entre os dois blocos.
 
         Retorna:
             Card: cartão pronto para ser adicionado ao layout do painel.
         """
         card = Card()
         lay = QHBoxLayout(card)
-        lay.setContentsMargins(16, 10, 16, 10)
-        lay.setSpacing(8)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(12)
 
         atalhos = [
-            ("Resumo dos logs", self.resumo_logs),
-            ("Nova execução", self.tela_config_robo),
-            ("Pasta de saída", self.abrir_pasta_saida),
-            ("Perfil", lambda: self._mensagem(
+            ("☰", "Resumo dos logs", self.resumo_logs),
+            ("◉", "Perfil", lambda: self._mensagem(
                 "Usuário", f"Conectado como: {self.usuario_logado or '—'}", "info"
             )),
-            ("Atualizar", self.tela_principal),
+            ("？", "Ajuda", self.abrir_ajuda),
         ]
-        for texto, acao in atalhos:
-            botao = Botao(texto, compacto=True)
+        for icone, texto, acao in atalhos:
+            botao = Botao(f"{icone}   {texto}", compacto=True)
             botao.clicked.connect(acao)
             lay.addWidget(botao, 1)
 
@@ -2901,6 +2913,11 @@ def aplicar_tema(app):
         QPushButton[compacto="true"]:disabled {{
             color: #B5AD9E;
             border-color: #E1DBCF;
+        }}
+
+        QPushButton[compacto="true"][grande="true"] {{
+            font-size: 13px;
+            padding: 0 20px;
         }}
 
         QPushButton[perigo="true"] {{
