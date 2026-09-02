@@ -69,6 +69,7 @@ PALAVRAS_MONETARIAS = [
 ]
 
 FORMATO_MOEDA = "R$ #,##0.00"
+FORMATO_DOLAR = "U$ #,##0.00"
 
 CABECALHOS_HTTP = {
     "User-Agent": (
@@ -741,6 +742,8 @@ def converter_valor_monetario(valor: object) -> float | None:
     texto = (
         texto
         .replace("R$", "")
+        .replace("US$", "")
+        .replace("U$", "")
         .replace(" ", "")
     )
 
@@ -812,6 +815,12 @@ def identificar_colunas_monetarias(cabecalho: list[str]) -> set[int]:
     chave em PALAVRAS_MONETARIAS (ex: "remuneração", "gratificação",
     "irrf", "total" etc.), ignorando maiúsculas/minúsculas.
 
+    Isso inclui tanto colunas em reais (ex: "REMUNERAÇÃO BÁSICA BRUTA
+    (R$)") quanto suas equivalentes em dólar (ex: "REMUNERAÇÃO BÁSICA
+    BRUTA (U$)") — a distinção entre as duas moedas é feita depois,
+    por identificar_colunas_dolar, para aplicar o símbolo de moeda
+    correto a cada uma.
+
     Parâmetros:
         cabecalho (list[str]): lista com os nomes das colunas (já
             filtradas para as colunas válidas).
@@ -827,6 +836,38 @@ def identificar_colunas_monetarias(cabecalho: list[str]) -> set[int]:
         and any(
             palavra in str(nome).lower()
             for palavra in PALAVRAS_MONETARIAS
+        )
+    }
+
+
+def identificar_colunas_dolar(cabecalho: list[str]) -> set[int]:
+    """Identifica, dentre as colunas do cabeçalho, quais representam
+    valores em dólar (não em reais), com base no nome conter "u$",
+    "us$" ou "usd", ignorando maiúsculas/minúsculas.
+
+    Usada em conjunto com identificar_colunas_monetarias: uma coluna
+    monetária que também aparece aqui recebe o formato FORMATO_DOLAR
+    em vez de FORMATO_MOEDA (R$) na planilha final. Colunas como
+    "REMUNERAÇÃO BÁSICA BRUTA (U$)" caem nesse caso; a equivalente
+    "... (R$)" não, e continua recebendo o formato em reais.
+
+    Parâmetros:
+        cabecalho (list[str]): lista com os nomes das colunas (já
+            filtradas para as colunas válidas).
+
+    Retorna:
+        set[int]: conjunto com os índices (na lista `cabecalho`) das
+        colunas identificadas como sendo em dólar.
+    """
+    marcadores_dolar = ("u$", "us$", "usd")
+
+    return {
+        indice
+        for indice, nome in enumerate(cabecalho)
+        if nome is not None
+        and any(
+            marcador in str(nome).lower()
+            for marcador in marcadores_dolar
         )
     }
 
