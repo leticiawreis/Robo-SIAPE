@@ -15,10 +15,7 @@ from datetime import datetime
 from typing import Generator, Iterable, TextIO
 
 import requests
-from openpyxl import Workbook
-from openpyxl.cell import WriteOnlyCell
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
+import xlsxwriter
 
 
 def _obter_pasta_base() -> str:
@@ -897,12 +894,14 @@ def criar_planilha_formatada(
     cabeçalho, das linhas de dados (tipicamente vindas do gerador
     ler_linhas_tratadas) e das larguras de coluna calculadas.
 
-    Usa o modo "write_only" do openpyxl (mais eficiente em memória para
-    grandes volumes de dados, pois escreve direto em disco em vez de
-    manter tudo em memória). Aplica formatação ao cabeçalho (negrito,
-    texto branco, fundo azul, alinhamento centralizado, quebra de
-    linha), congela a primeira linha (freeze_panes) e ajusta a largura
-    de cada coluna. Para colunas identificadas como monetárias
+    Usa o XlsxWriter em modo "constant_memory" (mais rápido e mais
+    eficiente em memória para grandes volumes de dados do que o
+    write_only do openpyxl, pois escreve cada linha direto em disco e
+    descarta o que já não precisa manter em memória). Aplica
+    formatação ao cabeçalho (negrito, texto branco, fundo azul,
+    alinhamento centralizado, quebra de linha), congela a primeira
+    linha (freeze_panes) e ajusta a largura de cada coluna. Para
+    colunas identificadas como monetárias
     (identificar_colunas_monetarias), converte o valor para número
     (converter_valor_monetario) e aplica o formato de moeda
     (FORMATO_MOEDA); quando a conversão falha, mantém o valor original
@@ -923,57 +922,45 @@ def criar_planilha_formatada(
     """
     inicio = time.time()
 
-    workbook = Workbook(write_only=True)
-    planilha = workbook.create_sheet(title="Remuneração")
-
-    fonte_cabecalho = Font(
-        bold=True,
-        color="FFFFFF"
+    workbook = xlsxwriter.Workbook(
+        caminho_saida,
+        {"constant_memory": True}
     )
+    planilha = workbook.add_worksheet("Remuneração")
 
-    preenchimento_cabecalho = PatternFill(
-        fill_type="solid",
-        fgColor="1F4E78"
-    )
+    formato_cabecalho = workbook.add_format({
+        "bold": True,
+        "font_color": "#FFFFFF",
+        "bg_color": "#1F4E78",
+        "align": "center",
+        "valign": "vcenter",
+        "text_wrap": True,
+        "bottom": 1,
+        "bottom_color": "#FFFFFF",
+    })
 
-    alinhamento_cabecalho = Alignment(
-        horizontal="center",
-        vertical="center",
-        wrap_text=True
-    )
+    formato_moeda = workbook.add_format({
+        "num_format": FORMATO_MOEDA,
+    })
 
-    borda_cabecalho = Border(
-        bottom=Side(
-            style="thin",
-            color="FFFFFF"
-        )
-    )
+    formato_dolar = workbook.add_format({
+        "num_format": FORMATO_DOLAR,
+    })
 
     colunas_monetarias = identificar_colunas_monetarias(
         cabecalho
     )
+    colunas_dolar = identificar_colunas_dolar(
+        cabecalho
+    )
 
-    for indice, largura in enumerate(larguras, start=1):
-        letra = get_column_letter(indice)
-        planilha.column_dimensions[letra].width = largura
+    for indice, largura in enumerate(larguras):
+        planilha.set_column(indice, indice, largura)
 
-    planilha.freeze_panes = "A2"
-    planilha.row_dimensions[1].height = 35
+    planilha.freeze_panes(1, 0)
+    planilha.set_row(0, 35)
 
-    linha_cabecalho = []
-
-    for valor in cabecalho:
-        celula = WriteOnlyCell(
-            planilha,
-            value=valor
-        )
-        celula.font = fonte_cabecalho
-        celula.fill = preenchimento_cabecalho
-        celula.alignment = alinhamento_cabecalho
-        celula.border = borda_cabecalho
-        linha_cabecalho.append(celula)
-
-    planilha.append(linha_cabecalho)
+    planilha.write_row(0, 0, cabecalho, formato_cabecalho)
 
     total = 0
 
@@ -991,25 +978,26 @@ def criar_planilha_formatada(
                     "Execução cancelada durante a geração da planilha."
                 )
 
-        linha_saida = []
+        linha_planilha = total + 1  # linha 0 é o cabeçalho
 
-        for indice, valor in enumerate(linha):
-            if indice in colunas_monetarias:
+        for coluna, valor in enumerate(linha):
+            if coluna in colunas_monetarias:
                 numero = converter_valor_monetario(valor)
 
                 if numero is not None:
-                    celula = WriteOnlyCell(
-                        planilha,
-                        value=numero
+                    formato_da_coluna = (
+                        formato_dolar
+                        if coluna in colunas_dolar
+                        else formato_moeda
                     )
-                    celula.number_format = FORMATO_MOEDA
-                    linha_saida.append(celula)
+                    planilha.write_number(
+                        linha_planilha, coluna, numero, formato_da_coluna
+                    )
                 else:
-                    linha_saida.append(valor)
+                    planilha.write(linha_planilha, coluna, valor)
             else:
-                linha_saida.append(valor)
+                planilha.write(linha_planilha, coluna, valor)
 
-        planilha.append(linha_saida)
         total += 1
 
         if total % 50000 == 0:
@@ -1018,15 +1006,11 @@ def criar_planilha_formatada(
                 total
             )
 
-    ultima_letra = get_column_letter(
-        len(larguras)
+    planilha.autofilter(
+        0, 0, total, len(larguras) - 1
     )
 
-    planilha.auto_filter.ref = (
-        f"A1:{ultima_letra}{total + 1}"
-    )
-
-    workbook.save(caminho_saida)
+    workbook.close()
 
     segundos = time.time() - inicio
 

@@ -5,7 +5,7 @@ PyQt6==6.11.0
 requests==2.34.2
 
 # Geração da planilha Excel
-openpyxl==3.1.5
+xlsxwriter==3.2.9
 
 # Empacotamento em executável (necessário apenas para rodar build.py)
 pyinstaller==6.22.2
