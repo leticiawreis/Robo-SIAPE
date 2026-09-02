@@ -1,3 +1,11 @@
+# Interface gráfica
+PyQt6==6.11.0
+
+# Download HTTP
+requests==2.34.2
+
+# Geração da planilha Excel
 openpyxl==3.1.5
-selenium==4.35.0
-PyQt6==6.9.1
+
+# Empacotamento em executável (necessário apenas para rodar build.py)
+pyinstaller==6.22.2
