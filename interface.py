@@ -60,9 +60,37 @@ def _obter_pasta_assets_ajuda():
 PASTA_ASSETS_AJUDA = _obter_pasta_assets_ajuda()
 
 
-ARQUIVO_USUARIOS = "usuarios.json"
-ARQUIVO_HISTORICO = "historico_execucoes.json"
-ARQUIVO_CONFIG = "config.json"
+def _obter_pasta_dados():
+    """Pasta onde ficam usuarios.json, historico_execucoes.json e
+    config.json.
+
+    Usa a pasta de dados de aplicativos do usuário do Windows
+    (%APPDATA%), em vez de uma pasta ao lado do .exe. Isso garante que:
+
+    - os dados sempre ficam no MESMO lugar, não importa de onde o
+      .exe seja executado ou para onde ele seja movido/copiado;
+    - o Windows nunca limpa essa pasta automaticamente (ao contrário
+      de uma pasta temp, que pode ser apagada a qualquer momento);
+    - é o mesmo padrão usado por programas como Chrome, Word, etc.
+
+    Em sistemas sem a variável de ambiente APPDATA (Linux/Mac, usado
+    apenas em testes/desenvolvimento), cai de volta para uma pasta
+    dentro do diretório "home" do usuário.
+    """
+    base_appdata = os.getenv("APPDATA")
+    if not base_appdata:
+        base_appdata = os.path.join(os.path.expanduser("~"), ".config")
+
+    pasta = os.path.join(base_appdata, "RoboSIAPE")
+    os.makedirs(pasta, exist_ok=True)
+    return pasta
+
+
+PASTA_DADOS = _obter_pasta_dados()
+
+ARQUIVO_USUARIOS = os.path.join(PASTA_DADOS, "usuarios.json")
+ARQUIVO_HISTORICO = os.path.join(PASTA_DADOS, "historico_execucoes.json")
+ARQUIVO_CONFIG = os.path.join(PASTA_DADOS, "config.json")
 
 
 def preparar_pastas():
