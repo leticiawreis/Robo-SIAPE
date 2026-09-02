@@ -58,19 +58,21 @@ Limpeza dos arquivos temporários
 - Identificação de colunas que possuem dados.
 - Remoção de linhas completamente vazias.
 - Preservação da base original em CSV.
-- Geração de planilha Excel com `openpyxl`.
+- Geração de planilha Excel com `xlsxwriter`.
 - Conversão de valores monetários para números.
 - Formatação dos valores monetários em reais.
 - Ajuste das larguras das colunas.
 - Cabeçalho formatado.
 - Congelamento da primeira linha.
 - Filtro automático na planilha.
-- Processamento utilizando modo `write_only` do `openpyxl`, adequado para grandes volumes de dados.
+- Processamento utilizando modo `constant_memory` do `xlsxwriter`, adequado para grandes volumes de dados e significativamente mais rápido que a geração anterior com `openpyxl`.
 - Registro detalhado da execução.
 - Log com data, hora e nível (`INFO`, `WARNING` e `ERROR`).
 - Limpeza dos arquivos temporários após a execução.
 - Criação de uma pasta exclusiva para cada execução.
 - Interface gráfica em PyQt6, com login local, painel de controle, histórico de execuções e configurações do usuário.
+- Janela abre em tamanho maior por padrão (1250x750), sem botão de maximizar/tela cheia e sem poder redimensionar pelas bordas (removido por causar bug no layout).
+- Botões do card "Ações rápidas" e da barra "Resumo dos logs / Perfil / Ajuda" com o mesmo estilo e tamanho, mantendo consistência visual entre os dois blocos.
 - Diálogo de ajuda passo a passo, com prints reais da interface anotados (setas/realces) mostrando onde clicar.
 - Empacotamento em executável (`.exe`) via PyInstaller, funcionando sem precisar do Python instalado na máquina de destino.
 
@@ -216,6 +218,8 @@ Apenas código-fonte, documentação e arquivos de configuração de exemplo. Na
 
 Responsável pela interface gráfica da aplicação (PyQt6) e pela interação com o usuário: login local, cadastro, seleção de ano/mês, painel de controle com histórico e indicadores, acompanhamento da execução em tempo real, exibição dos logs e o diálogo de ajuda passo a passo (ver `assets/ajuda/` abaixo).
 
+A janela principal abre em 1400x860, pode ser redimensionada livremente pelas bordas, mas não pode ser maximizada — o botão de maximizar foi removido (junto com o duplo clique na barra de título) porque o modo maximizado bugava o layout dos cartões. No card "Ações rápidas" e na barra "Resumo dos logs / Perfil / Ajuda" do painel, os botões usam o mesmo estilo (`compacto`), sem variação de tamanho entre os dois blocos, e o botão de ajuda que ficava duplicado ao lado de "Configurar robô" foi removido (a ação já existe na barra de atalhos).
+
 #### `robo_siape.py`
 
 Contém o pipeline completo da automação: download direto por HTTP, validação, extração do ZIP, tratamento do CSV, geração do Excel, logging e limpeza dos arquivos temporários.
@@ -342,7 +346,9 @@ Com as dependências instaladas (incluindo `pyinstaller`), rode:
 python build.py
 ```
 
-O executável final fica em `dist/RoboSIAPE.exe`. Basta copiar/mover **só o `.exe`** para a máquina de destino e executar — não é necessário levar o projeto inteiro, nem ter Python instalado nela.
+O executável final fica em `dist/RoboSIAPE.exe`. Basta copiar/mover **só o .exe** para a máquina de destino e executar, não é necessário levar o projeto inteiro, nem ter Python instalado nela.
+
+> **Nota sobre a pasta de dados (`%APPDATA%\RoboSIAPE`):** os arquivos `usuarios.json`, `config.json` e `historico_execucoes.json` não ficam mais na pasta do projeto nem ao lado do `.exe`. Eles são salvos em `%APPDATA%\RoboSIAPE`, a pasta de dados de aplicativos do usuário do Windows — o mesmo padrão usado por programas como Chrome ou Word. Isso é criado automaticamente na primeira execução, tanto rodando via `python interface.py` quanto via `RoboSIAPE.exe` (não é exclusivo do `.exe`). A vantagem é que os dados ficam sempre no mesmo lugar, não importa de onde o executável seja aberto ou para onde seja movido/copiado, e o Windows nunca limpa essa pasta automaticamente (ao contrário de uma pasta temporária).
 
 > **Prints do diálogo de ajuda embutidos no `.exe`:** se a pasta `assets/ajuda/` existir na raiz do projeto no momento do build, o `build.py` a embute dentro do próprio executável (via `--add-data` do PyInstaller). Em tempo de execução, o `.exe` extrai esses arquivos para uma pasta temporária (`sys._MEIPASS`) e o diálogo de ajuda os lê de lá — por isso não é preciso distribuir a pasta `assets/` separadamente junto com o `.exe`. Se `assets/ajuda/` não existir na hora do build, o `build.py` avisa no terminal e gera o `.exe` normalmente, só que sem os prints (o diálogo de ajuda mostra um aviso no lugar deles).
 
@@ -396,9 +402,6 @@ O `.gitignore` bloqueia arquivos como:
 
 ```text
 .env
-usuarios.json
-config.json
-historico_execucoes.json
 saida/
 build/
 dist/
@@ -406,6 +409,8 @@ dist/
 *.log
 *.zip
 ```
+
+> `usuarios.json`, `config.json` e `historico_execucoes.json` não ficam mais na pasta do projeto — eles são salvos em `%APPDATA%\RoboSIAPE` (ver [Nota sobre a pasta de dados](#gerando-o-executável-exe)), então nunca chegam a ser criados na raiz do repositório. As entradas correspondentes podem ser removidas do `.gitignore` se ainda estiverem lá de uma versão anterior do projeto.
 
 O repositório deve conter apenas código, documentação, arquivos de configuração de exemplo e dependências.
 
@@ -421,7 +426,9 @@ O download utiliza arquivos temporários e somente promove o arquivo para o nome
 
 ### Processamento em streaming
 
-A geração do Excel utiliza o modo `write_only` do `openpyxl`, evitando manter toda a planilha em memória.
+A geração do Excel utiliza o modo `constant_memory` do `xlsxwriter`, evitando manter toda a planilha em memória — cada linha é escrita direto em disco e descartada da memória assim que não é mais necessária.
+
+O projeto usava originalmente o modo `write_only` do `openpyxl` para o mesmo propósito, mas foi migrado para `xlsxwriter` por desempenho: em testes com a mesma formatação (cabeçalho, cores, larguras de coluna, formato monetário, congelamento de linha e autofiltro), o `xlsxwriter` em modo `constant_memory` processa a planilha entre 7x e 20x mais rápido que o `openpyxl` `write_only`, o que é especialmente relevante para os arquivos de remuneração do SIAPE, que costumam ter centenas de milhares de linhas.
 
 ### Caminho da pasta de saída independente de onde o robô é executado
 
