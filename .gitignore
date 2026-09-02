@@ -26,9 +26,6 @@ version_info.txt
 # Dados e configurações locais (não versionar)
 # =====================================================================
 .env
-usuarios.json
-config.json
-historico_execucoes.json
 
 # =====================================================================
 # Resultados gerados pelo robô
