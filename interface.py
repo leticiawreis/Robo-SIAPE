@@ -1373,7 +1373,7 @@ class App(QMainWindow):
         método chamador possa continuar montando o conteúdo da página.
 
         Retorna:
-            tuple: (pagina, layout) — o widget da página e seu layout
+            tuple: (pagina, layout), o widget da página e seu layout
             vertical, já configurado com espaçamento e margens padrão.
         """
         pagina = QWidget()
@@ -1442,7 +1442,7 @@ class App(QMainWindow):
         logo = LogoMark()
         card_layout.addWidget(logo, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        titulo = QLabel("Bem-vindo de volta")
+        titulo = QLabel("Bem-vindo(a)!")
         titulo.setObjectName("authTitle")
         titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card_layout.addWidget(titulo)
