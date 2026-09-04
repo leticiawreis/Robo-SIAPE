@@ -923,6 +923,55 @@ def calcular_largura_colunas(cabecalho: list[str]) -> list[int]:
     return larguras
 
 
+def _limpar_temporarios_workbook(workbook: "xlsxwriter.Workbook", logger: logging.Logger) -> None:
+    """Remove os arquivos temporários internos do XlsxWriter quando a
+    geração da planilha é cancelada antes de `workbook.close()`.
+
+    No modo `constant_memory`, cada planilha (worksheet) do workbook
+    escreve suas linhas num arquivo temporário próprio (fora da pasta
+    do projeto, no diretório temporário do sistema operacional) e só
+    apaga esse arquivo dentro do processo normal de `close()` — que
+    nunca roda se a execução for cancelada no meio do caminho. Sem essa
+    limpeza, esse temporário fica esquecido na pasta Temp do sistema
+    (pode chegar a dezenas/centenas de MB em bases grandes).
+
+    Chamada apenas quando `ExecucaoCancelada` interrompe
+    `criar_planilha_formatada` antes do `close()`; não é necessária em
+    uma execução concluída com sucesso, pois nesse caso o próprio
+    `close()` já cuida da limpeza.
+
+    Parâmetros:
+        workbook (xlsxwriter.Workbook): workbook que estava sendo
+            escrito no momento do cancelamento.
+        logger (logging.Logger): logger da execução, usado para
+            registrar o resultado da limpeza (não interrompe o
+            cancelamento em caso de falha).
+    """
+    for planilha in workbook.worksheets():
+        caminho_temp = getattr(planilha, "row_data_filename", None)
+        arquivo_temp = getattr(planilha, "row_data_fh", None)
+
+        if arquivo_temp is not None:
+            try:
+                arquivo_temp.close()
+            except Exception:
+                pass
+
+        if caminho_temp and os.path.exists(caminho_temp):
+            try:
+                os.remove(caminho_temp)
+                logger.info(
+                    "Arquivo temporário da planilha removido: %s",
+                    caminho_temp
+                )
+            except OSError as erro:
+                logger.warning(
+                    "Não foi possível remover o arquivo temporário da planilha (%s): %s",
+                    caminho_temp,
+                    erro
+                )
+
+
 def criar_planilha_formatada(
     cabecalho: list[str],
     linhas: "Iterable[list]",
@@ -950,6 +999,14 @@ def criar_planilha_formatada(
     processados e, ao final, define a área de autofiltro cobrindo todos
     os dados escritos.
 
+    Se a execução for cancelada (ExecucaoCancelada) antes do
+    workbook.close(), o arquivo .xlsx final nunca chega a ser criado —
+    mas os arquivos temporários internos do XlsxWriter (onde as linhas
+    já escritas ficam guardadas, fora da pasta do projeto) ficariam
+    esquecidos na pasta temporária do sistema operacional. Para evitar
+    esse lixo, esses temporários são removidos explicitamente antes de
+    repropagar o cancelamento — ver _limpar_temporarios_workbook.
+
     Parâmetros:
         cabecalho (list[str]): nomes das colunas da planilha.
         linhas (iterable): iterável (ou gerador) de linhas de dados, na
@@ -967,91 +1024,97 @@ def criar_planilha_formatada(
         caminho_saida,
         {"constant_memory": True}
     )
-    planilha = workbook.add_worksheet("Remuneração")
 
-    formato_cabecalho = workbook.add_format({
-        "bold": True,
-        "font_color": "#FFFFFF",
-        "bg_color": "#1F4E78",
-        "align": "center",
-        "valign": "vcenter",
-        "text_wrap": True,
-        "bottom": 1,
-        "bottom_color": "#FFFFFF",
-    })
+    try:
+        planilha = workbook.add_worksheet("Remuneração")
 
-    formato_moeda = workbook.add_format({
-        "num_format": FORMATO_MOEDA,
-    })
+        formato_cabecalho = workbook.add_format({
+            "bold": True,
+            "font_color": "#FFFFFF",
+            "bg_color": "#1F4E78",
+            "align": "center",
+            "valign": "vcenter",
+            "text_wrap": True,
+            "bottom": 1,
+            "bottom_color": "#FFFFFF",
+        })
 
-    formato_dolar = workbook.add_format({
-        "num_format": FORMATO_DOLAR,
-    })
+        formato_moeda = workbook.add_format({
+            "num_format": FORMATO_MOEDA,
+        })
 
-    colunas_monetarias = identificar_colunas_monetarias(
-        cabecalho
-    )
-    colunas_dolar = identificar_colunas_dolar(
-        cabecalho
-    )
+        formato_dolar = workbook.add_format({
+            "num_format": FORMATO_DOLAR,
+        })
 
-    for indice, largura in enumerate(larguras):
-        planilha.set_column(indice, indice, largura)
+        colunas_monetarias = identificar_colunas_monetarias(
+            cabecalho
+        )
+        colunas_dolar = identificar_colunas_dolar(
+            cabecalho
+        )
 
-    planilha.freeze_panes(1, 0)
-    planilha.set_row(0, 35)
+        for indice, largura in enumerate(larguras):
+            planilha.set_column(indice, indice, largura)
 
-    planilha.write_row(0, 0, cabecalho, formato_cabecalho)
+        planilha.freeze_panes(1, 0)
+        planilha.set_row(0, 35)
 
-    total = 0
+        planilha.write_row(0, 0, cabecalho, formato_cabecalho)
 
-    for linha in linhas:
-        # Esta é a etapa mais demorada do robô. Sem esta verificação, o clique
-        # em "Parar" apenas sinalizava o evento, mas o loop continuava até o
-        # fim do CSV. Checar a cada 1.000 registros mantém a resposta rápida
-        # sem adicionar custo relevante ao processamento.
-        if total % 1000 == 0:
-            if evento_parar is not None and evento_parar.is_set():
-                logger.info(
-                    "Execução interrompida pelo usuário durante a geração da planilha."
-                )
-                raise ExecucaoCancelada(
-                    "Execução cancelada durante a geração da planilha."
-                )
+        total = 0
 
-        linha_planilha = total + 1  # linha 0 é o cabeçalho
-
-        for coluna, valor in enumerate(linha):
-            if coluna in colunas_monetarias:
-                numero = converter_valor_monetario(valor)
-
-                if numero is not None:
-                    formato_da_coluna = (
-                        formato_dolar
-                        if coluna in colunas_dolar
-                        else formato_moeda
+        for linha in linhas:
+            # Esta é a etapa mais demorada do robô. Sem esta verificação, o clique
+            # em "Parar" apenas sinalizava o evento, mas o loop continuava até o
+            # fim do CSV. Checar a cada 1.000 registros mantém a resposta rápida
+            # sem adicionar custo relevante ao processamento.
+            if total % 1000 == 0:
+                if evento_parar is not None and evento_parar.is_set():
+                    logger.info(
+                        "Execução interrompida pelo usuário durante a geração da planilha."
                     )
-                    planilha.write_number(
-                        linha_planilha, coluna, numero, formato_da_coluna
+                    raise ExecucaoCancelada(
+                        "Execução cancelada durante a geração da planilha."
                     )
+
+            linha_planilha = total + 1  # linha 0 é o cabeçalho
+
+            for coluna, valor in enumerate(linha):
+                if coluna in colunas_monetarias:
+                    numero = converter_valor_monetario(valor)
+
+                    if numero is not None:
+                        formato_da_coluna = (
+                            formato_dolar
+                            if coluna in colunas_dolar
+                            else formato_moeda
+                        )
+                        planilha.write_number(
+                            linha_planilha, coluna, numero, formato_da_coluna
+                        )
+                    else:
+                        planilha.write(linha_planilha, coluna, valor)
                 else:
                     planilha.write(linha_planilha, coluna, valor)
-            else:
-                planilha.write(linha_planilha, coluna, valor)
 
-        total += 1
+            total += 1
 
-        if total % 50000 == 0:
-            logger.info(
-                "%d registros processados.",
-                total
-            )
+            if total % 50000 == 0:
+                logger.info(
+                    "%d registros processados.",
+                    total
+                )
 
-    planilha.autofilter(
-        0, 0, total, len(larguras) - 1
-    )
+        planilha.autofilter(
+            0, 0, total, len(larguras) - 1
+        )
 
-    workbook.close()
+        workbook.close()
+
+    except ExecucaoCancelada:
+        _limpar_temporarios_workbook(workbook, logger)
+        raise
 
     segundos = time.time() - inicio
 
