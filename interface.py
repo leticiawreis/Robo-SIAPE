@@ -1632,7 +1632,7 @@ class App(QMainWindow):
         topo.addWidget(
             criar_titulo(
                 "Painel de controle",
-                "Baixe, trate e organize a remuneração do SIAPE em poucos cliques — "
+                "Baixe, trate e organize a remuneração do SIAPE em poucos cliques, "
                 "direto do Portal da Transparência.",
             )
         )
@@ -1693,7 +1693,7 @@ class App(QMainWindow):
             "Em poucos cliques, o robô baixa o pacote certo direto do Portal da "
             "Transparência (modo headless, sem abrir navegador), remove o que não "
             "interessa, trata os valores monetários e entrega uma planilha Excel "
-            "pronta para usar — com cada etapa registrada em log."
+            "pronta para usar, com cada etapa registrada em log."
         )
         desc.setObjectName("cardText")
         desc.setWordWrap(True)
@@ -1974,11 +1974,26 @@ class App(QMainWindow):
         self.config[chave] = valor
         salvar_config(self.config)
 
+    # Altura fixa da área de rolagem da lista de arquivos: pequena de
+    # propósito, para o cartão ficar do mesmo tamanho compacto do
+    # estado vazio (e do cartão de gauges ao lado, na mesma linha do
+    # painel), independente de quantas execuções existirem — o scroll
+    # aparece dentro da lista assim que os arquivos não couberem mais.
+    ALTURA_LISTA_ARQUIVOS = 90
+
     def _card_arquivos(self):
         """Monta o cartão com a lista dos arquivos finais (.xlsx) mais
         recentemente gerados pelo robô (via listar_arquivos_saida),
         exibindo uma linha clicável para cada um. Se não houver nenhum
         arquivo ainda, exibe uma mensagem explicativa.
+
+        A lista fica dentro de uma área de rolagem com altura fixa e
+        pequena (ALTURA_LISTA_ARQUIVOS), do mesmo tamanho compacto do
+        estado vazio ("Nenhum arquivo gerado ainda...") — o cartão não
+        cresce conforme mais execuções vão sendo registradas, e o
+        scroll acontece apenas dentro da lista, sem alterar o tamanho
+        do cartão nem do cartão de gauges ao lado (na mesma linha do
+        painel).
 
         Retorna:
             Card: cartão pronto para ser adicionado ao layout do painel.
@@ -2002,8 +2017,24 @@ class App(QMainWindow):
             vazio.setWordWrap(True)
             lay.addWidget(vazio)
         else:
+            lista = QWidget()
+            lista.setObjectName("fileListContainer")
+            lista_lay = QVBoxLayout(lista)
+            lista_lay.setContentsMargins(0, 0, 0, 0)
+            lista_lay.setSpacing(8)
             for item in arquivos:
-                lay.addWidget(self._linha_arquivo(item))
+                lista_lay.addWidget(self._linha_arquivo(item))
+            lista_lay.addStretch()
+
+            scroll = QScrollArea()
+            scroll.setObjectName("fileListScroll")
+            scroll.setWidget(lista)
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            scroll.setFixedHeight(self.ALTURA_LISTA_ARQUIVOS)
+            lay.addWidget(scroll)
 
         lay.addStretch()
         return card
@@ -2335,7 +2366,7 @@ class App(QMainWindow):
 
         ilayout.addStretch()
 
-        self.exec_hint = QLabel("Download direto e headless — sem navegador, sem CAPTCHA.")
+        self.exec_hint = QLabel("Download direto e headless.")
         self.exec_hint.setObjectName("hint")
         ilayout.addWidget(self.exec_hint)
 
@@ -2859,6 +2890,20 @@ def aplicar_tema(app):
             background: transparent;
             font-size: 10px;
             font-weight: 700;
+        }}
+
+        QScrollArea#fileListScroll, QScrollArea#fileListScroll > QWidget > QWidget {{
+            background: transparent;
+            border: none;
+        }}
+
+        QWidget#fileListContainer {{
+            background: transparent;
+        }}
+
+        QScrollArea#fileListScroll QScrollBar:vertical {{
+            width: 6px;
+            margin: 0;
         }}
 
         QPushButton#toggleSwitch {{
