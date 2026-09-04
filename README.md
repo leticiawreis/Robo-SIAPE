@@ -2,7 +2,29 @@
 
 Automação em Python para download e tratamento dos dados de **remuneração de servidores públicos federais — SIAPE**, a partir dos arquivos disponibilizados pelo Portal da Transparência.
 
-A aplicação recebe **ano e mês** como entrada, realiza o download do pacote correspondente, extrai e trata o CSV de remuneração e gera uma planilha Excel pronta para consulta, além de registrar toda a execução em log.
+A aplicação recebe **ano e mês** como entrada, baixa o pacote correspondente, extrai e trata o CSV de remuneração e gera uma planilha Excel pronta para consulta, além de registrar toda a execução em log.
+
+## Sumário
+
+- [Objetivo](#objetivo)
+- [Funcionalidades](#funcionalidades)
+- [Interface gráfica](#interface-gráfica)
+- [Pacote utilizado](#pacote-utilizado)
+- [Processamento dos dados](#processamento-dos-dados)
+- [Tratamento do CSV](#tratamento-do-csv)
+- [Valores monetários](#valores-monetários)
+- [Estrutura do projeto](#estrutura-do-projeto)
+- [Instalação](#instalação)
+- [Execução (via código-fonte)](#execução-via-código-fonte)
+- [Gerando o executável (.exe)](#gerando-o-executável-exe)
+- [Testes (branch `dev`)](#testes-branch-dev)
+- [Requisitos](#requisitos)
+- [Segurança e versionamento](#segurança-e-versionamento)
+- [Decisões técnicas](#decisões-técnicas)
+- [Uso de Inteligência Artificial](#uso-de-inteligência-artificial)
+- [Histórico de commits](#histórico-de-commits)
+- [Limitações atuais](#limitações-atuais)
+- [Licença](#licença)
 
 ## Objetivo
 
@@ -36,45 +58,57 @@ Limpeza dos arquivos temporários
 
 ## Funcionalidades
 
-- Seleção de ano.
-- Seleção de mês.
-- Validação do ano e do mês.
+**Seleção e validação do período**
+- Seleção de ano e mês.
+- Validação da competência informada.
 - Bloqueio de competências futuras.
-- Verificação dos meses disponíveis.
-- Download direto por HTTP com `requests`.
-- Download sem Selenium e sem necessidade de abrir navegador.
-- Uso de dois endereços de download:
-  - Portal da Transparência;
-  - endereço estático de dados da CGU.
-- Download em arquivo temporário `.parcial`.
-- Validação do conteúdo recebido como ZIP.
-- Até **3 tentativas** de download em caso de falha.
-- Pausa de 2 segundos entre tentativas.
+- Verificação dos meses efetivamente disponíveis para o ano escolhido.
+
+**Download**
+- Download direto por HTTP com `requests`, sem Selenium e sem necessidade de abrir navegador.
+- Dois endereços de download utilizados: Portal da Transparência e o endereço estático de dados da CGU.
+- Download feito em arquivo temporário (`.parcial`) e só promovido ao nome definitivo após validar o conteúdo como ZIP.
+- Até **3 tentativas** em caso de falha, com pausa de 2 segundos entre elas.
+
+**Extração e localização do arquivo**
 - Extração automática do ZIP.
-- Remoção de arquivos considerados desnecessários.
-- Localização automática do CSV de remuneração.
-- Suporte a diferentes codificações do CSV.
-- Leitura do CSV com separador `;`.
-- Identificação de colunas que possuem dados.
+- Remoção de arquivos considerados desnecessários (ex: cadastro, afastamentos, observações).
+- Localização automática do CSV de remuneração dentro do pacote extraído.
+
+**Tratamento da base**
+- Suporte a diferentes codificações do CSV (UTF-8 com/sem BOM, CP1252, Latin-1).
+- Leitura com separador `;`.
+- Identificação de colunas que possuem dados e remoção de colunas totalmente vazias.
 - Remoção de linhas completamente vazias.
-- Preservação da base original em CSV.
-- Geração de planilha Excel com `xlsxwriter`.
-- Conversão de valores monetários para números.
+- Preservação da base original em CSV, sem tratamento.
+- Conversão de valores monetários identificados para números.
+
+**Geração do Excel**
+- Geração da planilha com `xlsxwriter`, em modo `constant_memory`, adequado para grandes volumes de dados e significativamente mais rápido que a geração anterior com `openpyxl`.
 - Formatação dos valores monetários em reais.
-- Ajuste das larguras das colunas.
-- Cabeçalho formatado.
-- Congelamento da primeira linha.
-- Filtro automático na planilha.
-- Processamento utilizando modo `constant_memory` do `xlsxwriter`, adequado para grandes volumes de dados e significativamente mais rápido que a geração anterior com `openpyxl`.
-- Registro detalhado da execução.
-- Log com data, hora e nível (`INFO`, `WARNING` e `ERROR`).
-- Limpeza dos arquivos temporários após a execução.
-- Criação de uma pasta exclusiva para cada execução.
-- Interface gráfica em PyQt6, com login local, painel de controle, histórico de execuções e configurações do usuário.
-- Janela abre em tamanho maior por padrão (1250x750), sem botão de maximizar/tela cheia e sem poder redimensionar pelas bordas (removido por causar bug no layout).
-- Botões do card "Ações rápidas" e da barra "Resumo dos logs / Perfil / Ajuda" com o mesmo estilo e tamanho, mantendo consistência visual entre os dois blocos.
-- Diálogo de ajuda passo a passo, com prints reais da interface anotados (setas/realces) mostrando onde clicar.
+- Ajuste automático das larguras de coluna, cabeçalho formatado, congelamento da primeira linha e filtro automático.
+
+**Log e organização de arquivos**
+- Registro detalhado da execução, com data, hora e nível (`INFO`, `WARNING`, `ERROR`).
+- Pasta exclusiva para cada execução, dentro de `saida/`.
+- Limpeza dos arquivos temporários ao final da execução.
+
+**Interface gráfica**
+- Interface em PyQt6, com login local, painel de controle, histórico de execuções e configurações do usuário, detalhes na seção [Interface gráfica](#interface-gráfica).
+
+**Empacotamento**
 - Empacotamento em executável (`.exe`) via PyInstaller, funcionando sem precisar do Python instalado na máquina de destino.
+
+## Interface gráfica
+
+A janela principal abre em **1250x750**, com botão de maximizar removido e sem possibilidade de redimensionar pelas bordas (tamanho fixo), o modo maximizado/redimensionado chegava a bugar o layout dos cartões, então essa opção foi retirada.
+
+No painel de controle:
+
+- O card **"Ações rápidas"** e a barra **"Resumo dos logs / Perfil / Ajuda"** usam botões com o mesmo estilo e tamanho, mantendo consistência visual entre os dois blocos.
+- O card **"Arquivos finais da execução"** lista os `.xlsx` gerados mais recentemente (clicáveis, abrem no aplicativo padrão do sistema) dentro de uma área de rolagem com **altura fixa**: a lista pode crescer internamente com o scroll, mas o card não estica conforme mais execuções vão sendo registradas, isso evita que o card vizinho (os indicadores circulares de execuções/taxa de sucesso) seja esticado junto e tenha o desenho distorcido.
+- Os indicadores circulares (gauges) mostram o total de execuções registradas e a taxa de sucesso em percentual.
+- Diálogo de ajuda passo a passo, com prints reais da interface anotados (setas/realces) mostrando onde clicar.
 
 ## Pacote utilizado
 
@@ -113,7 +147,7 @@ Se o CSV de remuneração não for encontrado, a execução é interrompida e o 
 
 O CSV é lido utilizando `;` como delimitador.
 
-O sistema tenta as seguintes codificações:
+O sistema tenta as seguintes codificações, nesta ordem:
 
 ```text
 UTF-8 com BOM
@@ -134,9 +168,7 @@ Durante o tratamento:
 
 O tratamento dos valores monetários é direcionado à **estrutura específica da planilha SIAPE utilizada pelo projeto**.
 
-Para identificar quais colunas devem ser tratadas como monetárias, o robô utiliza a lista `PALAVRAS_MONETARIAS`. A lista contém termos que aparecem nos nomes das colunas financeiras dessa base.
-
-Atualmente, são considerados:
+Para identificar quais colunas devem ser tratadas como monetárias, o robô utiliza a lista `PALAVRAS_MONETARIAS`. A lista contém termos que aparecem nos nomes das colunas financeiras dessa base. Atualmente, são considerados:
 
 ```python
 PALAVRAS_MONETARIAS = [
@@ -169,7 +201,7 @@ Esses termos **não representam uma lista genérica para qualquer planilha**. El
 
 Por isso, palavras como `fundo`, `taxa`, `verbas` e `total` permanecem na lista de forma intencional: dentro da estrutura dessa base específica, elas são utilizadas para identificar campos que devem receber tratamento monetário.
 
-O robô procura os termos nos nomes das colunas e, quando uma coluna é identificada como monetária, tenta converter os valores para números.
+O robô procura os termos nos nomes das colunas (ignorando maiúsculas/minúsculas) e, quando uma coluna é identificada como monetária, tenta converter os valores para números. Isso inclui tanto colunas em reais (ex: `REMUNERAÇÃO BÁSICA BRUTA (R$)`) quanto suas equivalentes em dólar (ex: `REMUNERAÇÃO BÁSICA BRUTA (U$)`), a distinção entre as duas moedas é feita à parte, para aplicar o símbolo correto a cada uma.
 
 Exemplo:
 
@@ -179,13 +211,7 @@ R$ 12.345,67
 12345.67
 ```
 
-Depois da conversão, o Excel recebe a formatação monetária:
-
-```text
-R$ #,##0.00
-```
-
-Isso permite que os valores sejam reconhecidos como números na planilha e utilizados em operações como filtros, somas e médias.
+Depois da conversão, o Excel recebe a formatação monetária correspondente (`R$ #,##0.00` ou `U$ #,##0.00`). Isso permite que os valores sejam reconhecidos como números na planilha e utilizados em operações como filtros, somas e médias.
 
 ## Estrutura do projeto
 
@@ -209,16 +235,14 @@ O projeto tem três "camadas" diferentes de arquivos: o que é código-fonte (ve
         └── passo3_iniciar.png
 ```
 
-Apenas código-fonte, documentação e arquivos de configuração de exemplo. Nada gerado por build ou execução é versionado — tudo isso está listado no `.gitignore`.
+Apenas código-fonte, documentação e arquivos de configuração de exemplo. Nada gerado por build ou execução é versionado, tudo isso está listado no `.gitignore`.
 
 > Essa é a estrutura da branch `main`. A branch `dev` acrescenta apenas o
-> `teste.py`, usado para estressar o robô — ver [Testes (branch dev)](#testes-branch-dev).
+> `teste.py`, usado para estressar o robô, ver [Testes (branch dev)](#testes-branch-dev).
 
 #### `interface.py`
 
-Responsável pela interface gráfica da aplicação (PyQt6) e pela interação com o usuário: login local, cadastro, seleção de ano/mês, painel de controle com histórico e indicadores, acompanhamento da execução em tempo real, exibição dos logs e o diálogo de ajuda passo a passo (ver `assets/ajuda/` abaixo).
-
-A janela principal abre em 1400x860, pode ser redimensionada livremente pelas bordas, mas não pode ser maximizada — o botão de maximizar foi removido (junto com o duplo clique na barra de título) porque o modo maximizado bugava o layout dos cartões. No card "Ações rápidas" e na barra "Resumo dos logs / Perfil / Ajuda" do painel, os botões usam o mesmo estilo (`compacto`), sem variação de tamanho entre os dois blocos, e o botão de ajuda que ficava duplicado ao lado de "Configurar robô" foi removido (a ação já existe na barra de atalhos).
+Responsável pela interface gráfica da aplicação (PyQt6) e pela interação com o usuário: login local, cadastro, seleção de ano/mês, painel de controle com histórico e indicadores, acompanhamento da execução em tempo real, exibição dos logs e o diálogo de ajuda passo a passo (ver `assets/ajuda/` abaixo). Detalhes de comportamento e layout do painel estão na seção [Interface gráfica](#interface-gráfica).
 
 #### `robo_siape.py`
 
@@ -242,9 +266,9 @@ Modelo de variáveis de ambiente do projeto, sem armazenar segredos ou credencia
 
 #### `assets/ajuda/`
 
-Prints reais da própria interface, já anotados com setas e círculos numerados indicando onde clicar. São usados pelo diálogo de ajuda (botão **"？ Ajuda"** no painel), que mostra esses três passos — iniciar uma nova execução, escolher o período e clicar em "INICIAR ROBÔ" — de forma navegável (Anterior/Próximo).
+Prints reais da própria interface, já anotados com setas e círculos numerados indicando onde clicar. São usados pelo diálogo de ajuda (botão **"？ Ajuda"** no painel), que mostra esses três passos, iniciar uma nova execução, escolher o período e clicar em "INICIAR ROBÔ", de forma navegável (Anterior/Próximo).
 
-Rodando via `python interface.py`, precisa estar na mesma pasta que `interface.py` (ao lado dele), com esses nomes de arquivo exatos. Rodando como `.exe`, essa pasta já vai embutida dentro do executável — ver [Gerando o executável](#gerando-o-executável-exe). Em ambos os casos, se as imagens não forem encontradas, o diálogo apenas mostra um aviso de "imagem não encontrada" no lugar do print, em vez de quebrar.
+Rodando via `python interface.py`, precisa estar na mesma pasta que `interface.py` (ao lado dele), com esses nomes de arquivo exatos. Rodando como `.exe`, essa pasta já vai embutida dentro do executável, ver [Gerando o executável](#gerando-o-executável-exe). Em ambos os casos, se as imagens não forem encontradas, o diálogo apenas mostra um aviso de "imagem não encontrada" no lugar do print, em vez de quebrar.
 
 ### 2. Pasta após rodar o `build.py` (gera o `.exe`)
 
@@ -271,9 +295,9 @@ Robo-SIAPE/
 
 `build/`, `dist/`, `RoboSIAPE.spec` e `saida/` não são versionados.
 
-A pasta `saida/` já aparece aqui porque é criada assim que a interface abre (independente de já ter rodado o robô). O caminho é resolvido de forma que a `saida/` sempre nasça na **raiz do projeto** (`Robo-SIAPE/`), nunca dentro de `dist/`, mesmo o `.exe` estando lá dentro — isso vale tanto rodando o `.exe` quanto rodando via `python interface.py`.
+A pasta `saida/` já aparece aqui porque é criada assim que a interface abre (independente de já ter rodado o robô). O caminho é resolvido de forma que a `saida/` sempre nasça na **raiz do projeto** (`Robo-SIAPE/`), nunca dentro de `dist/`, mesmo o `.exe` estando lá dentro, isso vale tanto rodando o `.exe` quanto rodando via `python interface.py`.
 
-A pasta `assets/` continua na raiz porque é a partir dela que o `build.py` embute os prints **dentro do próprio** `RoboSIAPE.exe` (veja a nota sobre `--add-data` em [Gerando o executável](#gerando-o-executável-exe)) — não é preciso copiá-la manualmente para `dist/`.
+A pasta `assets/` continua na raiz porque é a partir dela que o `build.py` embute os prints **dentro do próprio** `RoboSIAPE.exe` (veja a nota sobre `--add-data` em [Gerando o executável](#gerando-o-executável-exe)), não é preciso copiá-la manualmente para `dist/`.
 
 ### 3. Dentro de `saida/` após uma execução
 
@@ -292,7 +316,7 @@ saida/
 
 #### `AAAA-MM_timestamp/` (uma pasta nova por execução)
 
-Pasta exclusiva daquela execução, nomeada com a competência e um carimbo de data/hora — nunca é reaproveitada nem sobrescrita. Contém:
+Pasta exclusiva daquela execução, nomeada com a competência e um carimbo de data/hora, nunca é reaproveitada nem sobrescrita. Contém:
 
 - `base_bruta_AAAA_MM.csv` — cópia do CSV original extraído do pacote, sem tratamento;
 - `base_tratada_AAAA_MM.xlsx` — planilha final, tratada e formatada;
@@ -348,21 +372,21 @@ python build.py
 
 O executável final fica em `dist/RoboSIAPE.exe`. Basta copiar/mover **só o .exe** para a máquina de destino e executar, não é necessário levar o projeto inteiro, nem ter Python instalado nela.
 
-> **Nota sobre a pasta de dados (`%APPDATA%\RoboSIAPE`):** os arquivos `usuarios.json`, `config.json` e `historico_execucoes.json` não ficam mais na pasta do projeto nem ao lado do `.exe`. Eles são salvos em `%APPDATA%\RoboSIAPE`, a pasta de dados de aplicativos do usuário do Windows — o mesmo padrão usado por programas como Chrome ou Word. Isso é criado automaticamente na primeira execução, tanto rodando via `python interface.py` quanto via `RoboSIAPE.exe` (não é exclusivo do `.exe`). A vantagem é que os dados ficam sempre no mesmo lugar, não importa de onde o executável seja aberto ou para onde seja movido/copiado, e o Windows nunca limpa essa pasta automaticamente (ao contrário de uma pasta temporária).
+> **Nota sobre a pasta de dados (`%APPDATA%\RoboSIAPE`):** os arquivos `usuarios.json`, `config.json` e `historico_execucoes.json` não ficam mais na pasta do projeto nem ao lado do `.exe`. Eles são salvos em `%APPDATA%\RoboSIAPE`, a pasta de dados de aplicativos do usuário do Windows, o mesmo padrão usado por programas como Chrome ou Word. Isso é criado automaticamente na primeira execução, tanto rodando via `python interface.py` quanto via `RoboSIAPE.exe` (não é exclusivo do `.exe`). A vantagem é que os dados ficam sempre no mesmo lugar, não importa de onde o executável seja aberto ou para onde seja movido/copiado, e o Windows nunca limpa essa pasta automaticamente (ao contrário de uma pasta temporária).
 
-> **Prints do diálogo de ajuda embutidos no `.exe`:** se a pasta `assets/ajuda/` existir na raiz do projeto no momento do build, o `build.py` a embute dentro do próprio executável (via `--add-data` do PyInstaller). Em tempo de execução, o `.exe` extrai esses arquivos para uma pasta temporária (`sys._MEIPASS`) e o diálogo de ajuda os lê de lá — por isso não é preciso distribuir a pasta `assets/` separadamente junto com o `.exe`. Se `assets/ajuda/` não existir na hora do build, o `build.py` avisa no terminal e gera o `.exe` normalmente, só que sem os prints (o diálogo de ajuda mostra um aviso no lugar deles).
+> **Prints do diálogo de ajuda embutidos no `.exe`:** se a pasta `assets/ajuda/` existir na raiz do projeto no momento do build, o `build.py` a embute dentro do próprio executável (via `--add-data` do PyInstaller). Em tempo de execução, o `.exe` extrai esses arquivos para uma pasta temporária (`sys._MEIPASS`) e o diálogo de ajuda os lê de lá, por isso não é preciso distribuir a pasta `assets/` separadamente junto com o `.exe`. Se `assets/ajuda/` não existir na hora do build, o `build.py` avisa no terminal e gera o `.exe` normalmente, só que sem os prints (o diálogo de ajuda mostra um aviso no lugar deles).
 
 > **Nota sobre antivírus/SmartScreen:** executáveis gerados por PyInstaller sem assinatura digital podem ser sinalizados como suspeitos pelo Windows Defender/SmartScreen na primeira execução. Isso é um falso positivo comum desse tipo de empacotamento, não um problema no código. O `build.py` já toma algumas medidas para reduzir esse risco (sem compressão UPX, com metadados de versão no executável).
 
 ## Testes (branch `dev`)
 
-> ⚠️ `teste.py` existe **apenas na branch `dev`** — não faz parte do código
+> ⚠️ `teste.py` existe **apenas na branch `dev`**, não faz parte do código
 > enviado para `main`/produção, e não deve ser mesclado para lá.
 
 `teste.py` não é um teste unitário: ele roda o **pipeline completo**
 (`executar_pipeline_completo`) para **todas** as combinações de ano/mês
 conhecidas em `INDICES_ANOS`, uma atrás da outra, com o objetivo de
-**estressar o robô** — verificar se ele se comporta bem numa bateria grande
+**estressar o robô**, verificar se ele se comporta bem numa bateria grande
 de execuções reais, e não travar/quebrar em algum período específico.
 
 Para rodar (a partir da branch `dev`, na raiz do projeto, junto de
@@ -374,12 +398,12 @@ python teste.py
 
 Pontos de atenção:
 
-- Ele baixa **de verdade** cada pacote disponível — pode demorar bastante e
+- Ele baixa **de verdade** cada pacote disponível, pode demorar bastante e
   consumir banda, dependendo de quantos anos/meses existirem.
 - Cada execução bem-sucedida gera uma pasta em `saida/`, exatamente como uma
   execução normal feita pela interface. Se quiser, apague `saida/` depois.
 - Para restringir o teste a um intervalo específico (em vez de todos os
-  anos), edite `ANOS_PARA_TESTAR` no topo do arquivo — ex.:
+  anos), edite `ANOS_PARA_TESTAR` no topo do arquivo, ex.:
   `ANOS_PARA_TESTAR = ["2024", "2025", "2026"]`.
 - Há uma pausa de `PAUSA_ENTRE_TESTES_SEGUNDOS` (padrão: 3s) entre uma
   execução e outra, para não sobrecarregar o servidor.
@@ -410,7 +434,7 @@ dist/
 *.zip
 ```
 
-> `usuarios.json`, `config.json` e `historico_execucoes.json` não ficam mais na pasta do projeto — eles são salvos em `%APPDATA%\RoboSIAPE` (ver [Nota sobre a pasta de dados](#gerando-o-executável-exe)), então nunca chegam a ser criados na raiz do repositório. As entradas correspondentes podem ser removidas do `.gitignore` se ainda estiverem lá de uma versão anterior do projeto.
+> `usuarios.json`, `config.json` e `historico_execucoes.json` não ficam mais na pasta do projeto, eles são salvos em `%APPDATA%\RoboSIAPE` (ver [Nota sobre a pasta de dados](#gerando-o-executável-exe)), então nunca chegam a ser criados na raiz do repositório. As entradas correspondentes podem ser removidas do `.gitignore` se ainda estiverem lá de uma versão anterior do projeto.
 
 O repositório deve conter apenas código, documentação, arquivos de configuração de exemplo e dependências.
 
@@ -426,13 +450,17 @@ O download utiliza arquivos temporários e somente promove o arquivo para o nome
 
 ### Processamento em streaming
 
-A geração do Excel utiliza o modo `constant_memory` do `xlsxwriter`, evitando manter toda a planilha em memória — cada linha é escrita direto em disco e descartada da memória assim que não é mais necessária.
+A geração do Excel utiliza o modo `constant_memory` do `xlsxwriter`, evitando manter toda a planilha em memória, cada linha é escrita direto em disco e descartada da memória assim que não é mais necessária.
 
 O projeto usava originalmente o modo `write_only` do `openpyxl` para o mesmo propósito, mas foi migrado para `xlsxwriter` por desempenho: em testes com a mesma formatação (cabeçalho, cores, larguras de coluna, formato monetário, congelamento de linha e autofiltro), o `xlsxwriter` em modo `constant_memory` processa a planilha entre 7x e 20x mais rápido que o `openpyxl` `write_only`, o que é especialmente relevante para os arquivos de remuneração do SIAPE, que costumam ter centenas de milhares de linhas.
 
 ### Caminho da pasta de saída independente de onde o robô é executado
 
-Tanto rodando como script (`python interface.py`) quanto como executável (`RoboSIAPE.exe`), a pasta `saida/` é sempre resolvida em relação à raiz do projeto — nunca em relação à pasta temporária de extração do PyInstaller (`_MEIxxxxxx`) nem à pasta `dist/`. Isso é feito verificando se o processo está "congelado" (`sys.frozen`) e, nesse caso, usando `sys.executable` como referência (subindo um nível a partir de `dist/`) em vez de `__file__`.
+Tanto rodando como script (`python interface.py`) quanto como executável (`RoboSIAPE.exe`), a pasta `saida/` é sempre resolvida em relação à raiz do projeto, nunca em relação à pasta temporária de extração do PyInstaller (`_MEIxxxxxx`) nem à pasta `dist/`. Isso é feito verificando se o processo está "congelado" (`sys.frozen`) e, nesse caso, usando `sys.executable` como referência (subindo um nível a partir de `dist/`) em vez de `__file__`.
+
+### Lista de arquivos com altura fixa no painel
+
+O card "Arquivos finais da execução" mostra a lista dentro de uma área de rolagem com altura fixa, em vez de deixar o card crescer junto com o número de execuções. Isso evita que o card vizinho na mesma linha do painel (os indicadores circulares de execuções/taxa de sucesso) seja esticado, antes, como os dois cards dividem a mesma linha horizontal, um card crescendo em altura fazia o Qt esticar o outro junto, distorcendo o desenho dos indicadores.
 
 ### Separação de responsabilidades
 
@@ -453,20 +481,17 @@ limpeza final
 
 Isso facilita manutenção, testes e identificação de erros.
 
-
 ## Uso de Inteligência Artificial
 
 Utilizei ferramentas de IA como apoio ao longo do desenvolvimento. A lógica, a estrutura do projeto e as decisões de implementação foram feitas por mim; a IA foi usada como ferramenta de auxílio nos seguintes pontos:
 
-* **Download sem Selenium:** com apoio de IA, avaliei alternativas ao Selenium e migrei o download para requisições HTTP diretas (requests), eliminando a dependência de navegador e tornando a execução mais rápida e headless por natureza.
-* **Empacotamento em executável:** apoio de IA para configurar o build.py com PyInstaller, incluindo ajustes para reduzir falsos positivos de antivírus/SmartScreen (remoção de compressão UPX, inclusão de metadados de versão) e correção do caminho da pasta de saída para funcionar corretamente tanto rodando como script quanto como .exe.
-* **Git e GitHub**: usei IA (e vídeos no YouTube) como apoio para relembrar comandos e o fluxo de criação/organização do repositório, pois fazia tempo que eu não usava.
-* **Debug e revisão do código e do README:** apoio de IA para revisar o código, encontrar inconsistências entre a documentação e o comportamento real do robô, e organizar a escrita deste README.
-* **PyQt6:** com apoio de IA e vídeos explicativos no YouTube, aprendi a implementar o PyQt6 no projeto para deixar a interface gráfica mais limpa e com mais detalhes visuais.
+- **Download sem Selenium:** com apoio de IA, avaliei alternativas ao Selenium e migrei o download para requisições HTTP diretas (requests), eliminando a dependência de navegador e tornando a execução mais rápida e headless por natureza.
+- **Empacotamento em executável:** apoio de IA para configurar o `build.py` com PyInstaller, incluindo ajustes para reduzir falsos positivos de antivírus/SmartScreen (remoção de compressão UPX, inclusão de metadados de versão) e correção do caminho da pasta de saída para funcionar corretamente tanto rodando como script quanto como .exe.
+- **Git e GitHub:** usei IA (e vídeos no YouTube) como apoio para relembrar comandos e o fluxo de criação/organização do repositório, pois fazia tempo que eu não usava.
+- **Debug e revisão do código e do README:** apoio de IA para revisar o código, encontrar inconsistências entre a documentação e o comportamento real do robô, ajustar detalhes de layout da interface (como o comportamento do card de arquivos finais) e organizar a escrita deste README.
+- **PyQt6:** com apoio de IA e vídeos explicativos no YouTube, aprendi a implementar o PyQt6 no projeto para deixar a interface gráfica mais limpa e com mais detalhes visuais.
 
 Todo o código foi revisado, testado e é de meu conhecimento, posso explicar qualquer trecho da implementação.
-
-
 
 ## Histórico de commits
 
